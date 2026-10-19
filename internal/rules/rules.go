@@ -280,7 +280,41 @@ func ParseSize(s string) (int64, error) {
 	if err != nil || n <= 0 {
 		return 0, fmt.Errorf("must be a positive size such as 1MB or 512KiB")
 	}
+	if n > MaxBodyLimit/mult {
+		return 0, fmt.Errorf("must be at most 1GiB")
+	}
 	return n * mult, nil
+}
+
+// MaxBodyLimit is the largest max_body allowed. Bodies a rule changes are
+// held in memory, so the limit keeps a typo from exhausting it.
+const MaxBodyLimit = 1 << 30
+
+// validHeaderName reports whether s is an HTTP header field name (a token).
+func validHeaderName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validHeaderValue rejects control characters other than tab.
+func validHeaderValue(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 0x20 && c != '\t') || c == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 var idRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -399,6 +433,11 @@ func (l *loader) when(n *yamlite.Node, w *When) {
 	if h := n.Get("headers"); h != nil {
 		for _, kv := range l.kvs(h, "header") {
 			kv.Name = textproto.CanonicalMIMEHeaderKey(kv.Name)
+			if kv.Name == "Host" {
+				l.errf(h.Line, "matching on the Host header is not supported")
+			} else if !validHeaderName(kv.Name) {
+				l.errf(h.Line, "%q is not a valid header name", kv.Name)
+			}
 			w.Headers = append(w.Headers, kv)
 		}
 	}
@@ -436,6 +475,21 @@ var managedHeaders = map[string]bool{
 	"Content-Length": true, "Transfer-Encoding": true, "Content-Encoding": true,
 	"Connection": true, "Keep-Alive": true, "Proxy-Connection": true, "Te": true,
 	"Trailer": true, "Upgrade": true, "Host": true,
+	"Proxy-Authorization": true, "Proxy-Authenticate": true,
+}
+
+var groupRef = regexp.MustCompile(`\$\{([^}]*)\}|\$([A-Za-z0-9_]+)`)
+
+func groupExists(re *regexp.Regexp, name string) bool {
+	if n, err := strconv.Atoi(name); err == nil {
+		return n >= 0 && n <= re.NumSubexp()
+	}
+	for _, g := range re.SubexpNames() {
+		if g != "" && g == name {
+			return true
+		}
+	}
+	return false
 }
 
 var queryToken = regexp.MustCompile(`\{query\.([^{}]+)\}`)
@@ -458,11 +512,13 @@ func (l *loader) actions(n *yamlite.Node, isRequest bool) *Actions {
 	if sh := n.Get("set_headers"); sh != nil {
 		for _, kv := range l.kvs(sh, "set_headers") {
 			kv.Name = textproto.CanonicalMIMEHeaderKey(kv.Name)
-			if managedHeaders[kv.Name] {
+			if !validHeaderName(kv.Name) {
+				l.errf(sh.Line, "%q is not a valid header name", kv.Name)
+			} else if managedHeaders[kv.Name] {
 				l.errf(sh.Line, "header %s is managed by the proxy and cannot be set", kv.Name)
 			}
-			if strings.ContainsAny(kv.Glob, "\r\n") {
-				l.errf(sh.Line, "header %s value contains a line break", kv.Name)
+			if !validHeaderValue(kv.Glob) {
+				l.errf(sh.Line, "header %s value contains a control character", kv.Name)
 			}
 			a.SetHeaders = append(a.SetHeaders, kv)
 		}
@@ -470,7 +526,9 @@ func (l *loader) actions(n *yamlite.Node, isRequest bool) *Actions {
 	if rh := n.Get("remove_headers"); rh != nil {
 		for _, h := range l.stringList(rh, "remove_headers") {
 			h = textproto.CanonicalMIMEHeaderKey(h)
-			if managedHeaders[h] {
+			if !validHeaderName(h) {
+				l.errf(rh.Line, "%q is not a valid header name", h)
+			} else if managedHeaders[h] {
 				l.errf(rh.Line, "header %s is managed by the proxy and cannot be removed", h)
 			}
 			a.RemoveHeaders = append(a.RemoveHeaders, h)
@@ -519,6 +577,18 @@ func (l *loader) rewrite(n *yamlite.Node) *Rewrite {
 	}
 	if !strings.HasPrefix(ts, "/") && !strings.HasPrefix(ts, "$") {
 		l.errf(to.Line, "rewrite_path.to must start with /")
+	}
+	if strings.ContainsAny(ts, "?#") {
+		l.errf(to.Line, "rewrite_path.to changes the path only; it cannot contain ? or #")
+	}
+	for _, m := range groupRef.FindAllStringSubmatch(strings.ReplaceAll(ts, "$$", ""), -1) {
+		name := m[1]
+		if name == "" {
+			name = m[2]
+		}
+		if !groupExists(re, name) {
+			l.errf(to.Line, "rewrite_path.to refers to $%s, but from has no such group (write ${1}x to put text right after a group)", name)
+		}
 	}
 	rw := &Rewrite{From: re, FromS: fs, To: ts}
 	for _, m := range queryToken.FindAllStringSubmatch(ts, -1) {
@@ -579,6 +649,10 @@ func (l *loader) jsonOp(n *yamlite.Node) (JSONOp, bool) {
 		}
 		if ok && strings.HasPrefix(op.To.String()+".", op.From.String()+".") {
 			l.errf(p.KeyLine, "%s cannot move a field inside itself", op.Kind)
+			ok = false
+		}
+		if ok && op.Kind == "rename" && strings.HasPrefix(op.From.String()+".", op.To.String()+".") {
+			l.errf(p.KeyLine, "rename cannot move a field onto one of its parents; use copy and delete")
 			ok = false
 		}
 	case "set":

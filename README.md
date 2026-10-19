@@ -124,10 +124,11 @@ A rule file has a list of rules. Each rule has an `id`, a `when:` block that pic
 The main promise is that a rule repairs one thing and breaks nothing else. In practice:
 
 - **Traffic no rule matches passes through byte for byte**, and it streams. AfterPatch doesn't buffer it or decompress it. The test suite checks this with hundreds of random requests and responses: binary bodies, odd paths, gzip, chunked and empty bodies, and every common status.
-- **A body it can't safely change is passed on unchanged and logged as skipped.** That covers bodies that aren't valid JSON, bodies over `max_body` (1 MiB by default), compression other than gzip, and responses that have no body. JSON changes never touch other fields, and keys keep their order.
-- **Gzip bodies are decoded, changed and compressed again**, and `Content-Length` is corrected. An `ETag` that described the old bytes is removed.
-- **A dead upstream gets a clean `502` and a slow one a `504`** after `upstream_timeout` (30 seconds by default). Both are logged.
-- **The audit log never contains values**: no header values, JSON values, query values or bodies. It records rule ids, method, path, query parameter names, status codes and the names of what changed.
+- **A body it can't safely change is passed on unchanged and logged as skipped.** That covers bodies that aren't valid JSON, JSON that wouldn't survive being rewritten (invalid UTF-8, duplicate keys), bodies over `max_body` (1 MiB by default), compression other than gzip, and responses that have no body. When a body is changed, every other field keeps its value and keys keep their order.
+- **Gzip bodies are decoded, changed and compressed again**, and `Content-Length` is corrected. `ETag` and digest headers that described the old bytes are removed.
+- **Path rules can't be tricked by `..`.** A rule with a `path` condition never matches a path with `.` or `..` segments or an encoded slash, and a path rewrite never produces one.
+- **A dead upstream gets a clean `502` and a slow one a `504`** after `upstream_timeout` (30 seconds by default). That includes a body a rule is waiting for. Both are logged.
+- **The audit log never contains values**: no header values, JSON values, query values or bodies, and upstream errors are described in fixed words. It records rule ids, method, path, query parameter names, status codes and the names of what changed.
 - **Dry run changes zero bytes.** The tests check that too.
 
 Recorded results, including the latency the proxy adds, are in [test/results](test/results).

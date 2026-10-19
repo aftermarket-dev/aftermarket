@@ -160,7 +160,19 @@ func runTests() ([]testResult, error) {
 			})
 		}
 	}
-	_ = cmd.Wait() // failures are counted from the results
+	waitErr := cmd.Wait()
+	failed := 0
+	for _, r := range results {
+		if r.Result == "fail" {
+			failed++
+		}
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("go test reported no tests (%v)", waitErr)
+	}
+	if waitErr != nil && failed == 0 {
+		return nil, fmt.Errorf("go test failed without a failing test, probably a build error: %v", waitErr)
+	}
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Package != results[j].Package {
 			return results[i].Package < results[j].Package

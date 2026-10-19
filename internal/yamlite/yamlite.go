@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // Kind is the type of a Node.
@@ -226,8 +228,15 @@ func isQuoteStart(s string, i int) bool {
 		return true
 	}
 	switch s[j] {
-	case ':', '-', '[', '{', ',':
+	case '[', '{', ',':
 		return true
+	case ':', '-':
+		// Only "key: 'x'" and "- 'x'": a space must separate them from the
+		// quote, and a list dash must stand on its own.
+		if j == i-1 {
+			return false
+		}
+		return s[j] == ':' || j == 0 || s[j-1] == ' '
 	}
 	return false
 }
@@ -482,6 +491,23 @@ func (p *parser) parseBlockScalar(header string, l line, indent int) (*Node, err
 	for p.pos < len(p.lines) {
 		cur := p.lines[p.pos]
 		if cur.indent < 0 {
+			// A blank line, or a line that looked like a comment. Inside a
+			// block scalar "# text" is content, so check the raw line.
+			raw := strings.TrimRight(cur.raw, " \t\r")
+			rawIndent := len(raw) - len(strings.TrimLeft(raw, " "))
+			if strings.TrimSpace(raw) != "" && rawIndent > indent {
+				if blockIndent < 0 {
+					blockIndent = rawIndent
+				}
+				if rawIndent >= blockIndent {
+					body = append(body, cur.raw[blockIndent:])
+					p.pos++
+					continue
+				}
+			}
+			if strings.TrimSpace(raw) != "" && rawIndent <= indent {
+				break // a comment after the block ends it
+			}
 			body = append(body, "")
 			p.pos++
 			continue
@@ -650,8 +676,26 @@ func unescapeDouble(s string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("bad \\%c escape", s[i])
 			}
-			b.WriteRune(rune(code))
 			i += size
+			r := rune(code)
+			if utf16.IsSurrogate(r) {
+				// A high surrogate must be followed by a \u low surrogate.
+				if r < 0xdc00 && i+6 < len(s)+0 && s[i+1] == '\\' && s[i+2] == 'u' {
+					lo, err := strconv.ParseUint(s[i+3:i+7], 16, 32)
+					if err == nil {
+						if pair := utf16.DecodeRune(r, rune(lo)); pair != utf8.RuneError {
+							b.WriteRune(pair)
+							i += 6
+							continue
+						}
+					}
+				}
+				return "", fmt.Errorf("unpaired surrogate escape")
+			}
+			if !utf8.ValidRune(r) {
+				return "", fmt.Errorf("escape is not a valid character")
+			}
+			b.WriteRune(r)
 		default:
 			return "", fmt.Errorf("unknown escape \\%c", s[i])
 		}
@@ -685,6 +729,9 @@ func (f *flowParser) value() (*Node, error) {
 			if f.i < len(f.s) && f.s[f.i] == ']' {
 				f.i++
 				return n, nil
+			}
+			if f.i < len(f.s) && f.s[f.i] == ',' {
+				return nil, errf(f.line, "empty item in list")
 			}
 			v, err := f.value()
 			if err != nil {

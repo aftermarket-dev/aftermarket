@@ -1,0 +1,988 @@
+{
+  "version": "0.1.0",
+  "recorded_at": "2026-10-19T15:27:34Z",
+  "go_version": "go1.24.7",
+  "os": "linux",
+  "arch": "amd64",
+  "cpus": 2,
+  "tests_passed": 157,
+  "tests_failed": 0,
+  "tests_total": 157,
+  "tests": [
+    {
+      "package": "cmd/aftermarket",
+      "test": "TestCheckExample",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "cmd/aftermarket",
+      "test": "TestCheckReportsErrorsAndOverlaps",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "cmd/aftermarket",
+      "test": "TestRunNeedsUpstream",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "cmd/aftermarket",
+      "test": "TestTestExample",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "cmd/aftermarket",
+      "test": "TestTestFailingFixture",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "cmd/aftermarket",
+      "test": "TestUsage",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "cmd/aftermarket",
+      "test": "TestVersion",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "examples/legacy-customer",
+      "test": "TestFixtureFilePasses",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "examples/legacy-customer",
+      "test": "TestOldClientNeedsTheRules",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "examples/legacy-customer",
+      "test": "TestRemovingEitherRuleBreaksTheClient",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/ojson",
+      "test": "TestCloneIsDeep",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/ojson",
+      "test": "TestDecodeKeepsRealReplacementCharacters",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/ojson",
+      "test": "TestDecodeRejects",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/ojson",
+      "test": "TestParsePath",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/ojson",
+      "test": "TestPathOps",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/ojson",
+      "test": "TestRename",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/ojson",
+      "test": "TestRoundTripKeepsOrderAndNumbers",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "Test204AuditSaysNoBody",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestAuditNeverContainsValues",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestBodiesThatWouldNotRoundTripAreSkipped",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestBrokenGzipPassesUnchanged",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestChangedBodyDropsTrailersAndDigests",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestChunkedResponseIsPatched",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestConcurrencySoak",
+      "result": "pass",
+      "seconds": 2.48
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestConnectionListedHeadersAreDroppedWhenARuleMatches",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestDryRunChangesZeroBytes",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestFixtureErrors",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestFixtureReportsFailures",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestForwardingHeadersCanBeChanged",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestGzipContentLengthIsCorrected",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestGzipResponseIsPatchedAndRecompressed",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestHealthPath",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestMalformedJSONPassesUnchanged",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestMalformedRequestBodyPassesUnchanged",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestMatchedResponseIsPatched",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestNewValidatesUpstream",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestNoBodyResponsesAreSkipped",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestNullBodyIsUnchangedNotSkipped",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestOddQueryStringsPassThroughExactly",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestOversizeBodyPassesUnchanged",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestPartlyAppliedRuleIsLoggedAsChanged",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestPathRulesIgnoreDotSegments",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestRequestIsPatched",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestRewriteCannotEscapeItsPrefix",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestRewriteNeedsItsQueryParameter",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestRuleOrderIsDeterministic",
+      "result": "pass",
+      "seconds": 0.18
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestSlowUpstreamGives504",
+      "result": "pass",
+      "seconds": 0.31
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestStalledBodyGives504",
+      "result": "pass",
+      "seconds": 0.3
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestUnmatchedResponseStreams",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestUnmatchedTrafficIsByteIdentical",
+      "result": "pass",
+      "seconds": 1.92
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestUnsupportedEncodingPassesUnchanged",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestUpgradePassesThrough",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestUpstreamBasePath",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestUpstreamDownGives502",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestUpstreamErrorReasonHasNoValues",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestGlobMatch",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_header_name",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_id",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_op",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_path",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_regexp",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_remove_name",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_size",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_status",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_timeout",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/bad_version",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/control_char",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/dup_id",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/empty",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/host_match",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/huge_size",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/into_itself",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/managed_header",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/missing_group",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/missing_id",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/no_actions",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/no_rules",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/no_when",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/over_cap",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/proxy_auth",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/query_in_to",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/rename_to_parent",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/rewrite_on_response",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/same_path",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/set_no_value",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/status_on_request",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/unknown_top",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadErrors/yaml_error",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestLoadGood",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestMatching",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestOverlaps",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestParseSize",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestPathGlob",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestReportsAllErrors",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/rules",
+      "test": "TestRewriteGroupReferences",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestLineNumbers",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/alias",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/anchor",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/bad_escape",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/bad_indent",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/complex_key",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/dup_key",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/empty_flow_item",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/flow_trailing",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/inline_nested_map",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/leading_empty_item",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/list_in_map",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/lone_surrogate",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/merge",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/not_a_key",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/start_indented",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/tab_indent",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/tag",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/two_docs",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/unclosed_flow",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseErrors/unclosed_quote",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/colon_no_space",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/colon_quote_is_plain",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/comment_after_literal",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/comment_only",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/comments",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/crlf",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/dash_quote_is_plain",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/doc_marker",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/double_quoted",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/empty",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/empty_flow",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/empty_item",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/escapes",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/flat_map",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/flow_map",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/flow_multiline",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/flow_seq",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/folded",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/folded_with_hash",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/item_block",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/literal",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/literal_blank_inside",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/literal_first_line_hash",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/literal_keep_indent",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/literal_strip",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/literal_with_hash_lines",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/nested_map",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/nested_seq",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/null_forms",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/quoted_key",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/seq",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/seq_item_map_then_key",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/seq_of_maps",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/seq_under_key_indented",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/seq_under_key_same_indent",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/single_quoted",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/surrogate_pair",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/yamlite",
+      "test": "TestParseValid/url_value",
+      "result": "pass",
+      "seconds": 0
+    }
+  ],
+  "latency": [
+    {
+      "name": "direct to upstream",
+      "requests": 20000,
+      "p50_us": 30,
+      "p99_us": 228.8,
+      "mean_us": 47.1,
+      "concurrency": 16,
+      "requests_per_second": 36302
+    },
+    {
+      "name": "proxy, no rule matches",
+      "requests": 20000,
+      "p50_us": 86.5,
+      "p99_us": 802.8,
+      "mean_us": 136.5,
+      "concurrency": 16,
+      "requests_per_second": 9813
+    },
+    {
+      "name": "proxy, both example rules applied",
+      "requests": 20000,
+      "p50_us": 134.1,
+      "p99_us": 1413,
+      "mean_us": 211,
+      "concurrency": 16,
+      "requests_per_second": 7863
+    }
+  ],
+  "added_p50_us": 56.5,
+  "added_p99_us": 574,
+  "patched_added_p50_us": 104.1,
+  "patched_added_p99_us": 1184.2
+}

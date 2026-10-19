@@ -97,6 +97,16 @@ func TestLoadErrors(t *testing.T) {
 		{"bad size", "limits: {max_body: lots}\nrules: []\n", "max_body"},
 		{"bad timeout", "limits: {upstream_timeout: -1s}\nrules: []\n", "upstream_timeout"},
 		{"yaml error", "rules:\n\t- a\n", "tabs"},
+		{"huge size", "limits: {max_body: 10000000000GiB}\nrules: []\n", "at most 1GiB"},
+		{"over cap", "limits: {max_body: 9223372036854775807}\nrules: []\n", "at most 1GiB"},
+		{"bad header name", "rules:\n  - id: a\n    when: {}\n    request: {set_headers: {\"Bad Name\": x}}\n", "not a valid header name"},
+		{"control char", "rules:\n  - id: a\n    when: {}\n    request: {set_headers: {X: \"a\\0b\"}}\n", "control character"},
+		{"bad remove name", "rules:\n  - id: a\n    when: {}\n    request: {remove_headers: [\"a b\"]}\n", "not a valid header name"},
+		{"proxy auth", "rules:\n  - id: a\n    when: {}\n    request: {set_headers: {Proxy-Authorization: x}}\n", "managed by the proxy"},
+		{"host match", "rules:\n  - id: a\n    when: {headers: {host: x}}\n    request: {set_headers: {X: y}}\n", "Host header"},
+		{"rename to parent", "rules:\n  - id: a\n    when: {}\n    response:\n      json:\n        - rename: {from: a.b, to: a}\n", "onto one of its parents"},
+		{"missing group", "rules:\n  - id: a\n    when: {}\n    request: {rewrite_path: {from: \"^/v1/(.*)$\", to: /v2/$1_detail}}\n", "no such group"},
+		{"query in to", "rules:\n  - id: a\n    when: {}\n    request: {rewrite_path: {from: \"^/v1/(.*)$\", to: \"/v2/$1?f=json\"}}\n", "cannot contain ?"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -108,6 +118,16 @@ func TestLoadErrors(t *testing.T) {
 				t.Fatalf("error:\n%v\ndoes not contain %q", err, c.want)
 			}
 		})
+	}
+}
+
+func TestRewriteGroupReferences(t *testing.T) {
+	ok := []string{"/v2/$1", "/v2/${1}_detail", "/v2/${name}", "/v2/$name", "/v2/$$1", "/v2/{query.id}"}
+	for _, to := range ok {
+		src := "rules:\n  - id: a\n    when: {}\n    request: {rewrite_path: {from: \"^/v1/(?P<name>.*)$\", to: \"" + to + "\"}}\n"
+		if _, err := Load([]byte(src)); err != nil {
+			t.Errorf("to %q: %v", to, err)
+		}
 	}
 }
 

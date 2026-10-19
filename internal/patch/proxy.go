@@ -6,8 +6,11 @@ package patch
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -46,18 +49,15 @@ type Proxy struct {
 
 type ctxKey struct{}
 
-// state carries what the request phase decided into the response phase.
+// state carries what the proxy knows about one request between phases.
 type state struct {
 	id        uint64
 	method    string
-	path      string
+	path      string // the path the client sent, decoded
+	rawQuery  string // the query string exactly as the client sent it
 	queryKeys []string
+	reqRules  []*rules.Rule
 	respRules []*rules.Rule
-	// outgoing request changes, applied in Rewrite unless dry run
-	header  http.Header
-	newPath string
-	body    []byte // replacement body, or nil to keep the original
-	bodySet bool
 }
 
 // New builds a proxy.
@@ -94,7 +94,6 @@ func New(opts Options) (*Proxy, error) {
 		ErrorHandler:   p.errorHandler,
 		Transport:      tr,
 		FlushInterval:  -1,
-		ErrorLog:       nil,
 	}
 	return p, nil
 }
@@ -104,6 +103,21 @@ func (p *Proxy) eventKind() string {
 		return audit.WouldChange
 	}
 	return audit.Changed
+}
+
+// unsafePath reports whether a path contains "." or ".." segments or an
+// encoded slash. Upstreams often resolve these differently from a glob, so
+// rules with a path condition never match such requests.
+func unsafePath(u *url.URL) bool {
+	if strings.Contains(strings.ToLower(u.EscapedPath()), "%2f") {
+		return true
+	}
+	for _, seg := range strings.Split(u.Path, "/") {
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeHTTP handles one request.
@@ -116,30 +130,31 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := &state{
-		id:     p.reqID.Add(1),
-		method: r.Method,
-		path:   r.URL.Path,
+		id:       p.reqID.Add(1),
+		method:   r.Method,
+		path:     r.URL.Path,
+		rawQuery: r.URL.RawQuery,
 	}
-	query := r.URL.Query()
+	query, _ := url.ParseQuery(r.URL.RawQuery) // keeps the parts that parse
 	for k := range query {
 		st.queryKeys = append(st.queryKeys, k)
 	}
 	sort.Strings(st.queryKeys)
 
-	var reqRules []*rules.Rule
+	pathUnsafe := unsafePath(r.URL)
 	for _, rule := range p.opts.Config.Rules {
+		if rule.When.PathGlob != "" && pathUnsafe {
+			continue
+		}
 		if !rule.When.MatchRequest(r.Method, r.URL.Path, query, r.Header) {
 			continue
 		}
 		if rule.Request != nil {
-			reqRules = append(reqRules, rule)
+			st.reqRules = append(st.reqRules, rule)
 		}
 		if rule.Response != nil {
 			st.respRules = append(st.respRules, rule)
 		}
-	}
-	if len(reqRules) > 0 {
-		p.requestPhase(r, st, reqRules, query)
 	}
 	ctx := context.WithValue(r.Context(), ctxKey{}, st)
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
@@ -161,181 +176,187 @@ func (p *Proxy) event(st *state, rule *rules.Rule, phase, kind string, status in
 	})
 }
 
-// requestPhase works out the changes to the outgoing request. Changes are
-// computed on copies; Rewrite applies them unless this is a dry run.
-func (p *Proxy) requestPhase(r *http.Request, st *state, reqRules []*rules.Rule, query url.Values) {
-	st.header = r.Header.Clone()
-	path := r.URL.Path
-
-	// Buffer the body once if any rule wants to change JSON.
-	var br *bodyRead
-	var doc any
-	bodySkip := ""
-	needBody := false
-	for _, rule := range reqRules {
-		if rule.Request.HasBodyOps() {
-			needBody = true
-		}
-	}
-	if needBody {
-		switch {
-		case !isJSONType(r.Header.Get("Content-Type")):
-			bodySkip = "request body is not JSON"
-		default:
-			var err error
-			br, err = readBody(r.Body, p.opts.Config.MaxBody)
-			r.Body = br.restore() // the original bytes stay available either way
-			switch {
-			case errors.Is(err, errTooLarge):
-				bodySkip = "request body is larger than max_body"
-			case err != nil:
-				bodySkip = "request body could not be read"
-			default:
-				if reason, ok := br.decode(r.Header.Get("Content-Encoding"), p.opts.Config.MaxBody); !ok {
-					bodySkip = reason
-				} else if d, err := ojson.Decode(br.plain); err != nil {
-					bodySkip = "request body is not valid JSON"
-				} else {
-					doc = d
-				}
-			}
-		}
-	}
-
-	bodyChanged := false
-	for _, rule := range reqRules {
-		a := rule.Request
-		var applied, notApplied []string
-		if a.RewritePath != nil {
-			np, desc, ok := rewritePath(a.RewritePath, path, query)
-			if ok {
-				if np != path {
-					path = np
-					applied = append(applied, desc)
-				} else {
-					notApplied = append(notApplied, desc+" (already in place)")
-				}
-			} else {
-				notApplied = append(notApplied, desc)
-			}
-		}
-		ha, hn := applyHeaders(st.header, a)
-		applied = append(applied, ha...)
-		notApplied = append(notApplied, hn...)
-		if a.HasBodyOps() {
-			if doc == nil {
-				p.event(st, rule, "request", audit.Skipped, 0, applied, notApplied, bodySkip)
-				continue
-			}
-			res := applyJSON(doc, a.JSON)
-			if len(res.applied) > 0 {
-				bodyChanged = true
-			}
-			applied = append(applied, res.applied...)
-			notApplied = append(notApplied, res.notApplied...)
-		}
-		kind := p.eventKind()
-		if len(applied) == 0 {
-			kind = audit.Unchanged
-		}
-		p.event(st, rule, "request", kind, 0, applied, notApplied, "")
-	}
-	if path != r.URL.Path {
-		st.newPath = path
-	}
-	if bodyChanged {
-		plain, err := ojson.Encode(doc)
-		if err == nil {
-			st.body = encodeBody(plain, br.gzipped)
-			st.bodySet = true
-		}
+// finish writes the audit event for one rule. bodySkip is set when the rule
+// has JSON operations that could not run.
+func (p *Proxy) finish(st *state, rule *rules.Rule, phase string, status int, applied, notApplied []string, bodySkip string) {
+	switch {
+	case bodySkip != "" && len(applied) == 0:
+		p.event(st, rule, phase, audit.Skipped, status, nil, notApplied, bodySkip)
+	case len(applied) == 0:
+		p.event(st, rule, phase, audit.Unchanged, status, nil, notApplied, "")
+	default:
+		p.event(st, rule, phase, p.eventKind(), status, applied, notApplied, bodySkip)
 	}
 }
 
-// rewritePath applies one rewrite_path action.
-func rewritePath(rw *rules.Rewrite, path string, query url.Values) (string, string, bool) {
-	desc := "rewrite path"
-	if !rw.From.MatchString(path) {
-		return path, desc + " (from did not match " + path + ")", false
-	}
-	to := rw.To
-	for _, name := range rw.Tokens {
-		vals, ok := query[name]
-		if !ok || len(vals) == 0 || vals[0] == "" {
-			return path, desc + " (query parameter " + name + " missing)", false
-		}
-		v := strings.ReplaceAll(url.PathEscape(vals[0]), "$", "$$")
-		to = strings.ReplaceAll(to, "{query."+name+"}", v)
-	}
-	np := rw.From.ReplaceAllString(path, to)
-	if !strings.HasPrefix(np, "/") {
-		return path, desc + " (result does not start with /)", false
-	}
-	return np, desc, true
-}
-
-// rewrite builds the outgoing request.
+// rewrite builds the outgoing request and applies request rules to it.
 func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 	st, _ := pr.In.Context().Value(ctxKey{}).(*state)
 	pr.SetURL(p.opts.Upstream)
+	if st == nil {
+		return
+	}
+	// Forward the query string exactly as the client sent it.
+	switch {
+	case p.opts.Upstream.RawQuery == "":
+		pr.Out.URL.RawQuery = st.rawQuery
+	case st.rawQuery == "":
+		pr.Out.URL.RawQuery = p.opts.Upstream.RawQuery
+	default:
+		pr.Out.URL.RawQuery = p.opts.Upstream.RawQuery + "&" + st.rawQuery
+	}
 	// Keep forwarding headers the client sent; Rewrite strips them by default.
 	for _, h := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded"} {
 		if v, ok := pr.In.Header[h]; ok {
 			pr.Out.Header[h] = v
 		}
 	}
-	if st == nil || p.opts.DryRun {
+	if len(st.reqRules) > 0 {
+		p.requestPhase(pr, st)
+	}
+}
+
+// requestPhase applies request rules to the outgoing request. In a dry run
+// the changes are worked out on copies and only logged.
+func (p *Proxy) requestPhase(pr *httputil.ProxyRequest, st *state) {
+	out := pr.Out
+	header := out.Header
+	if p.opts.DryRun {
+		header = out.Header.Clone()
+	}
+	escPath := pr.In.URL.EscapedPath()
+	query, _ := url.ParseQuery(st.rawQuery)
+
+	needBody := false
+	for _, rule := range st.reqRules {
+		if rule.Request.HasBodyOps() {
+			needBody = true
+		}
+	}
+	var br *bodyRead
+	var doc any
+	decoded := false
+	bodySkip := ""
+	if needBody {
+		switch {
+		case !isJSONType(out.Header.Get("Content-Type")):
+			bodySkip = "request body is not JSON"
+		case out.Body == nil || out.Body == http.NoBody:
+			bodySkip = "request has no body"
+		default:
+			var err error
+			br, err = readBody(out.Body, p.opts.Config.MaxBody)
+			out.Body = br.restore() // the original bytes stay available either way
+			switch {
+			case errors.Is(err, errTooLarge):
+				bodySkip = "request body is larger than max_body"
+			case err != nil:
+				bodySkip = "request body could not be read"
+			default:
+				if reason, ok := br.decode(out.Header.Get("Content-Encoding"), p.opts.Config.MaxBody); !ok {
+					bodySkip = reason
+				} else if d, err := ojson.Decode(br.plain); err != nil {
+					bodySkip = "request body is not JSON that can be changed safely (" + err.Error() + ")"
+				} else {
+					doc, decoded = d, true
+				}
+			}
+		}
+	}
+
+	newPath := escPath
+	bodyChanged := false
+	for _, rule := range st.reqRules {
+		a := rule.Request
+		var applied, notApplied []string
+		if a.RewritePath != nil {
+			np, desc, ok := rewritePath(a.RewritePath, newPath, query)
+			switch {
+			case !ok:
+				notApplied = append(notApplied, desc)
+			case np == newPath:
+				notApplied = append(notApplied, desc+" (already in place)")
+			default:
+				newPath = np
+				applied = append(applied, desc)
+			}
+		}
+		ha, hn := applyHeaders(header, a)
+		applied = append(applied, ha...)
+		notApplied = append(notApplied, hn...)
+		skip := ""
+		if a.HasBodyOps() {
+			if !decoded {
+				skip = bodySkip
+				notApplied = append(notApplied, "json changes ("+bodySkip+")")
+			} else {
+				res := applyJSON(doc, a.JSON)
+				if len(res.applied) > 0 {
+					bodyChanged = true
+				}
+				applied = append(applied, res.applied...)
+				notApplied = append(notApplied, res.notApplied...)
+			}
+		}
+		p.finish(st, rule, "request", 0, applied, notApplied, skip)
+	}
+	if p.opts.DryRun {
 		return
 	}
-	if st.header != nil {
-		// Replace end-to-end headers with the edited copy, keeping what the
-		// reverse proxy itself manages (hop-by-hop headers are already gone).
-		for k := range pr.Out.Header {
-			if _, keep := st.header[k]; !keep && !managed(k) {
-				delete(pr.Out.Header, k)
-			}
-		}
-		for k, v := range st.header {
-			if managed(k) || hopByHop(k) {
-				continue
-			}
-			pr.Out.Header[k] = v
+	if newPath != escPath {
+		plain, err := url.PathUnescape(newPath)
+		if err == nil {
+			out.URL.Path = joinPath(p.opts.Upstream.Path, plain)
+			out.URL.RawPath = joinPath(p.opts.Upstream.EscapedPath(), newPath)
 		}
 	}
-	if st.newPath != "" {
-		// newPath is in escaped form (query values were path-escaped).
-		plain, err := url.PathUnescape(st.newPath)
+	if bodyChanged {
+		plain, err := ojson.Encode(doc)
+		if err == nil {
+			body := encodeBody(plain, br.gzipped)
+			out.Body = ioNop(body)
+			out.ContentLength = int64(len(body))
+			out.Header.Set("Content-Length", strconv.Itoa(len(body)))
+			out.TransferEncoding = nil
+			out.GetBody = nil
+			dropBodyValidators(out.Header)
+		}
+	}
+}
+
+// rewritePath applies one rewrite_path action to an escaped path and returns
+// the new escaped path.
+func rewritePath(rw *rules.Rewrite, escPath string, query url.Values) (string, string, bool) {
+	desc := "rewrite path"
+	if !rw.From.MatchString(escPath) {
+		return escPath, desc + " (from did not match)", false
+	}
+	to := rw.To
+	for _, name := range rw.Tokens {
+		vals, ok := query[name]
+		if !ok || len(vals) == 0 || vals[0] == "" {
+			return escPath, desc + " (query parameter " + name + " missing)", false
+		}
+		v := vals[0]
+		if v == "." || v == ".." || strings.ContainsAny(v, "/\\") {
+			return escPath, desc + " (query parameter " + name + " is not a safe path segment)", false
+		}
+		to = strings.ReplaceAll(to, "{query."+name+"}", strings.ReplaceAll(url.PathEscape(v), "$", "$$"))
+	}
+	np := rw.From.ReplaceAllString(escPath, to)
+	if !strings.HasPrefix(np, "/") {
+		return escPath, desc + " (result does not start with /)", false
+	}
+	for _, seg := range strings.Split(np, "/") {
+		plain, err := url.PathUnescape(seg)
 		if err != nil {
-			plain = st.newPath
+			return escPath, desc + " (result is not a valid path)", false
 		}
-		pr.Out.URL.Path = joinPath(p.opts.Upstream.Path, plain)
-		pr.Out.URL.RawPath = joinPath(p.opts.Upstream.EscapedPath(), st.newPath)
+		if plain == "." || plain == ".." {
+			return escPath, desc + " (result contains . or .. segments)", false
+		}
 	}
-	if st.bodySet {
-		pr.Out.Body = ioNop(st.body)
-		pr.Out.ContentLength = int64(len(st.body))
-		pr.Out.Header.Set("Content-Length", strconv.Itoa(len(st.body)))
-		pr.Out.TransferEncoding = nil
-		pr.Out.GetBody = nil
-	}
-}
-
-func managed(k string) bool {
-	switch k {
-	case "Content-Length", "Transfer-Encoding", "Content-Encoding", "Host",
-		"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "Forwarded":
-		return true
-	}
-	return false
-}
-
-func hopByHop(k string) bool {
-	switch k {
-	case "Connection", "Keep-Alive", "Proxy-Connection", "Proxy-Authenticate",
-		"Proxy-Authorization", "Te", "Trailer", "Upgrade":
-		return true
-	}
-	return false
+	return np, desc, true
 }
 
 func joinPath(base, p string) string {
@@ -343,6 +364,44 @@ func joinPath(base, p string) string {
 		return p
 	}
 	return strings.TrimSuffix(base, "/") + p
+}
+
+// dropBodyValidators removes headers that describe the old body bytes.
+func dropBodyValidators(h http.Header) {
+	for _, k := range []string{"Etag", "Content-Md5", "Digest", "Content-Digest", "Repr-Digest"} {
+		h.Del(k)
+	}
+}
+
+// bodyTimeoutError is returned when a body a rule needs does not arrive within
+// upstream_timeout.
+type bodyTimeoutError struct{}
+
+func (bodyTimeoutError) Error() string   { return "upstream body did not arrive within upstream_timeout" }
+func (bodyTimeoutError) Timeout() bool   { return true }
+func (bodyTimeoutError) Temporary() bool { return true }
+
+// readBodyWithin is readBody with a deadline. On timeout the body is closed.
+func readBodyWithin(body io.ReadCloser, max int64, d time.Duration) (*bodyRead, error) {
+	type result struct {
+		br  *bodyRead
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		br, err := readBody(body, max)
+		ch <- result{br, err}
+	}()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case r := <-ch:
+		return r.br, r.err
+	case <-t.C:
+		_ = body.Close()
+		<-ch
+		return nil, bodyTimeoutError{}
+	}
 }
 
 // modifyResponse applies response rules.
@@ -374,6 +433,7 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	}
 	var br *bodyRead
 	var doc any
+	decoded := false
 	bodySkip := ""
 	if needBody {
 		switch {
@@ -383,7 +443,10 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 			bodySkip = "response body is not JSON"
 		default:
 			var err error
-			br, err = readBody(resp.Body, p.opts.Config.MaxBody)
+			br, err = readBodyWithin(resp.Body, p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout)
+			if errors.As(err, &bodyTimeoutError{}) {
+				return err // answered with 504 by errorHandler
+			}
 			resp.Body = br.restore()
 			switch {
 			case errors.Is(err, errTooLarge):
@@ -394,9 +457,9 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 				if reason, ok := br.decode(resp.Header.Get("Content-Encoding"), p.opts.Config.MaxBody); !ok {
 					bodySkip = reason
 				} else if d, err := ojson.Decode(br.plain); err != nil {
-					bodySkip = "response body is not valid JSON"
+					bodySkip = "response body is not JSON that can be changed safely (" + err.Error() + ")"
 				} else {
-					doc = d
+					doc, decoded = d, true
 				}
 			}
 		}
@@ -406,23 +469,21 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	for _, rule := range matched {
 		a := rule.Response
 		applied, notApplied := applyHeaders(header, a)
+		skip := ""
 		if a.HasBodyOps() {
-			if doc == nil {
-				p.event(st, rule, "response", audit.Skipped, resp.StatusCode, applied, notApplied, bodySkip)
-				continue
+			if !decoded {
+				skip = bodySkip
+				notApplied = append(notApplied, "json changes ("+bodySkip+")")
+			} else {
+				res := applyJSON(doc, a.JSON)
+				if len(res.applied) > 0 {
+					bodyChanged = true
+				}
+				applied = append(applied, res.applied...)
+				notApplied = append(notApplied, res.notApplied...)
 			}
-			res := applyJSON(doc, a.JSON)
-			if len(res.applied) > 0 {
-				bodyChanged = true
-			}
-			applied = append(applied, res.applied...)
-			notApplied = append(notApplied, res.notApplied...)
 		}
-		kind := p.eventKind()
-		if len(applied) == 0 {
-			kind = audit.Unchanged
-		}
-		p.event(st, rule, "response", kind, resp.StatusCode, applied, notApplied, "")
+		p.finish(st, rule, "response", resp.StatusCode, applied, notApplied, skip)
 	}
 
 	if bodyChanged && !p.opts.DryRun {
@@ -433,9 +494,11 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 			resp.ContentLength = int64(len(out))
 			resp.Header.Set("Content-Length", strconv.Itoa(len(out)))
 			resp.TransferEncoding = nil
-			// The old validators describe the old bytes.
-			resp.Header.Del("Etag")
-			resp.Header.Del("Content-Md5")
+			// Trailers announced for the old chunked body cannot follow a
+			// body with a length.
+			resp.Header.Del("Trailer")
+			resp.Trailer = nil
+			dropBodyValidators(resp.Header)
 		}
 	}
 	return nil
@@ -447,17 +510,46 @@ type nopBody struct{ *bytes.Reader }
 
 func (nopBody) Close() error { return nil }
 
+// upstreamReason turns an upstream error into a fixed description, so error
+// text (which can quote upstream bytes) never reaches the audit log.
+func upstreamReason(err error) (int, string) {
+	var ne net.Error
+	if errors.As(err, &bodyTimeoutError{}) {
+		return http.StatusGatewayTimeout, "upstream body did not arrive within upstream_timeout"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return http.StatusGatewayTimeout, "upstream did not answer within upstream_timeout"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return http.StatusBadGateway, "upstream host name could not be resolved"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return http.StatusBadGateway, "could not connect to upstream"
+	}
+	var certErr *tls.CertificateVerificationError
+	var unknownAuth x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	var recErr tls.RecordHeaderError
+	if errors.As(err, &certErr) || errors.As(err, &unknownAuth) || errors.As(err, &hostErr) || errors.As(err, &recErr) {
+		return http.StatusBadGateway, "TLS error talking to upstream"
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return http.StatusBadGateway, "upstream closed the connection"
+	}
+	return http.StatusBadGateway, "upstream sent a response that could not be read"
+}
+
 // errorHandler answers when the upstream cannot be reached in time.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	st, _ := r.Context().Value(ctxKey{}).(*state)
 	if errors.Is(r.Context().Err(), context.Canceled) {
 		return // the client went away; nobody to answer
 	}
-	status := http.StatusBadGateway
+	status, reason := upstreamReason(err)
 	msg := "aftermarket: upstream unreachable\n"
-	var ne net.Error
-	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
-		status = http.StatusGatewayTimeout
+	if status == http.StatusGatewayTimeout {
 		msg = "aftermarket: upstream timed out\n"
 	}
 	if st != nil {
@@ -468,7 +560,7 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 			Path:      st.path,
 			QueryKeys: st.queryKeys,
 			Status:    status,
-			Reason:    err.Error(),
+			Reason:    reason,
 		})
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")

@@ -13,6 +13,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Object is a JSON object with ordered keys.
@@ -56,8 +57,13 @@ func (o *Object) Delete(key string) bool {
 	return true
 }
 
-// Decode parses one JSON value and rejects trailing data.
+// Decode parses one JSON value. It rejects trailing data, and anything that
+// would not survive a round trip unchanged: invalid UTF-8, unpaired UTF-16
+// surrogate escapes and duplicate object keys.
 func Decode(data []byte) (any, error) {
+	if !utf8.Valid(data) {
+		return nil, errors.New("invalid UTF-8")
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
 	v, err := decodeValue(dec)
@@ -66,6 +72,16 @@ func Decode(data []byte) (any, error) {
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return nil, errors.New("unexpected data after the JSON value")
+	}
+	// encoding/json turns an unpaired surrogate escape into U+FFFD. Count
+	// replacement characters before and after to catch that.
+	enc, err := Encode(v)
+	if err != nil {
+		return nil, err
+	}
+	before := bytes.Count(data, []byte("\uFFFD")) + bytes.Count(bytes.ToLower(data), []byte(`\ufffd`))
+	if bytes.Count(enc, []byte("\uFFFD")) > before {
+		return nil, errors.New("unpaired UTF-16 surrogate escape")
 	}
 	return v, nil
 }
@@ -95,6 +111,9 @@ func decodeValue(dec *json.Decoder) (any, error) {
 				v, err := decodeValue(dec)
 				if err != nil {
 					return nil, err
+				}
+				if _, dup := o.Get(key); dup {
+					return nil, fmt.Errorf("duplicate key %q", key)
 				}
 				o.Set(key, v)
 			}

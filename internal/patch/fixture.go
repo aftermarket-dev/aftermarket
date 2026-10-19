@@ -91,6 +91,9 @@ func parseCase(n *yamlite.Node, i int) (Case, error) {
 		var err error
 		switch p.Key {
 		case "name":
+			if p.Value.Kind != yamlite.Scalar {
+				return c, fmt.Errorf("line %d: name must be a single value", p.KeyLine)
+			}
 			c.Name = p.Value.Value
 		case "request":
 			c.Request, err = parseMessage(p.Value, true)
@@ -128,6 +131,12 @@ func parseCase(n *yamlite.Node, i int) (Case, error) {
 	if c.Request.Path == "" {
 		return c, fmt.Errorf("line %d: case %q needs request.path", n.Line, c.Name)
 	}
+	if u, err := url.ParseRequestURI(c.Request.Path); err != nil || !strings.HasPrefix(c.Request.Path, "/") || strings.ContainsAny(c.Request.Path, " \t\r\n") || u.Host != "" {
+		return c, fmt.Errorf("line %d: case %q: request.path %q must be a path such as /api/x?id=1, with spaces written as %%20", n.Line, c.Name, c.Request.Path)
+	}
+	if c.Request.Method != "" && !validMethod(c.Request.Method) {
+		return c, fmt.Errorf("line %d: case %q: %q is not an HTTP method", n.Line, c.Name, c.Request.Method)
+	}
 	if c.Request.Method == "" {
 		c.Request.Method = http.MethodGet
 	}
@@ -147,6 +156,9 @@ func parseMessage(n *yamlite.Node, isRequest bool) (Message, error) {
 	}
 	for _, p := range n.Pairs {
 		v := p.Value
+		if p.Key != "headers" && v.Kind != yamlite.Scalar && v.Kind != yamlite.Null {
+			return m, fmt.Errorf("line %d: %s must be a single value (quote a JSON body: body: '{\"a\": 1}')", p.KeyLine, p.Key)
+		}
 		switch {
 		case p.Key == "method" && isRequest:
 			m.Method = strings.ToUpper(v.Value)
@@ -163,6 +175,9 @@ func parseMessage(n *yamlite.Node, isRequest bool) (Message, error) {
 				return m, fmt.Errorf("line %d: headers must be a mapping", v.Line)
 			}
 			for _, h := range v.Pairs {
+				if h.Value.Kind != yamlite.Scalar && h.Value.Kind != yamlite.Null {
+					return m, fmt.Errorf("line %d: header %s must have a single value", h.KeyLine, h.Key)
+				}
 				val := h.Value.Value
 				if h.Value.Kind == yamlite.Null {
 					val = ""
@@ -180,6 +195,18 @@ func parseMessage(n *yamlite.Node, isRequest bool) (Message, error) {
 		}
 	}
 	return m, nil
+}
+
+func validMethod(m string) bool {
+	if m == "" {
+		return false
+	}
+	for _, c := range m {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // CaseResult is the outcome of one case.

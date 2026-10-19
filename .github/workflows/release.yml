@@ -5,7 +5,8 @@
 # https://github.com/aftermarket-dev/aftermarket/releases/latest/download/<archive>
 # always points at the newest release.
 #
-# Run it by hand with a tag to rebuild the files of an existing release.
+# Run it by hand with a tag to rebuild the files of an existing release (or
+# to publish a tag whose release is missing).
 
 name: Release
 
@@ -44,22 +45,34 @@ jobs:
       - id: plan
         env:
           TAG: ${{ inputs.tag }}
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
           ref=$(git rev-parse HEAD)
           rebuild=false
           release=true
+          if [ "$EVENT" = workflow_dispatch ] && [ -z "$TAG" ]; then
+            echo "Run by hand only to rebuild an existing tag. New versions are released by pushing them to main, after CI passes."
+            exit 1
+          fi
           if [ -n "$TAG" ]; then
             if [ "v$version" != "$TAG" ]; then
               echo "tag $TAG holds version $version"; exit 1
             fi
-            rebuild=true
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              rebuild=true
+            fi
           elif [[ "$version" == *-* ]]; then
             echo "version $version is a development version; nothing to release"
             release=false
           elif git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "v$version is already tagged; nothing to release"
-            release=false
+            if gh release view "v$version" >/dev/null 2>&1; then
+              echo "v$version is already released; nothing to do"
+              release=false
+            else
+              echo "v$version is tagged but has no release yet; publishing it"
+            fi
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
@@ -113,8 +126,13 @@ jobs:
         include:
           - os: ubuntu-latest
             archive: aftermarket_linux_amd64.tar.gz
+          - os: ubuntu-24.04-arm
+            archive: aftermarket_linux_arm64.tar.gz
           - os: macos-latest
             archive: aftermarket_darwin_arm64.tar.gz
+          - os: macos-latest
+            archive: aftermarket_darwin_amd64.tar.gz
+            prefix: arch -x86_64
           - os: windows-latest
             archive: aftermarket_windows_amd64.zip
     runs-on: ${{ matrix.os }}
@@ -130,6 +148,7 @@ jobs:
         env:
           VERSION: ${{ needs.plan.outputs.version }}
           ARCHIVE: ${{ matrix.archive }}
+          PREFIX: ${{ matrix.prefix }}
         run: |
           set -euo pipefail
           mkdir smoke && cd smoke
@@ -140,11 +159,12 @@ jobs:
           dir=${ARCHIVE%.tar.gz}; dir=${dir%.zip}
           cd "$dir"
           bin=./aftermarket; [ -f aftermarket.exe ] && bin=./aftermarket.exe
-          out=$("$bin" version | tr -d '\r')
+          file "$bin" || true
+          out=$($PREFIX "$bin" version | tr -d '\r')
           echo "$out"
           [ "$out" = "aftermarket $VERSION" ]
-          "$bin" patch check --config examples/legacy-customer/rules.yaml
-          "$bin" patch test --config examples/legacy-customer/rules.yaml --fixture examples/legacy-customer/fixture.yaml
+          $PREFIX "$bin" patch check --config examples/legacy-customer/rules.yaml
+          $PREFIX "$bin" patch test --config examples/legacy-customer/rules.yaml --fixture examples/legacy-customer/fixture.yaml
 
   publish:
     needs: [plan, build, smoke]

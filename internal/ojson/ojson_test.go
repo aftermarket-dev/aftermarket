@@ -30,8 +30,17 @@ func TestRoundTripKeepsOrderAndNumbers(t *testing.T) {
 	}
 }
 
+func TestDecodeKeepsRealReplacementCharacters(t *testing.T) {
+	for _, in := range []string{`{"s":"\ufffd"}`, "{\"s\":\"\uFFFD\"}", `{"s":"\ud83d\ude00"}`} {
+		if _, err := Decode([]byte(in)); err != nil {
+			t.Errorf("Decode(%s): %v", in, err)
+		}
+	}
+}
+
 func TestDecodeRejects(t *testing.T) {
-	for _, s := range []string{``, `{`, `{"a":1}x`, `{"a":1} {"b":2}`, `[1,]`, `nope`} {
+	for _, s := range []string{``, `{`, `{"a":1}x`, `{"a":1} {"b":2}`, `[1,]`, `nope`,
+		`{"a":1,"a":2}`, "{\"s\":\"\xff\"}", `{"s":"\ud800"}`, `{"s":"\udc00x"}`} {
 		if _, err := Decode([]byte(s)); err == nil {
 			t.Errorf("Decode(%q) should fail", s)
 		}

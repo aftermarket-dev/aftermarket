@@ -51,10 +51,16 @@ func TestFixtureErrors(t *testing.T) {
 		"":                                 "cases",
 		"cases: []":                        "no cases",
 		"cases:\n  - request: {path: /}\n": "nothing under expect",
-		"cases:\n  - expect: {response: {status: 1}}":                      "status must be",
-		"cases:\n  - request: {}\n    expect: {response: {status: 200}}\n": "needs request.path",
-		"cases:\n  - bogus: 1\n":                                           "unknown key",
-		"other: 1\ncases: []\n":                                            "unknown key",
+		"cases:\n  - expect: {response: {status: 1}}":                                               "status must be",
+		"cases:\n  - request: {}\n    expect: {response: {status: 200}}\n":                          "needs request.path",
+		"cases:\n  - bogus: 1\n":                                                                    "unknown key",
+		"other: 1\ncases: []\n":                                                                     "unknown key",
+		"cases:\n  - request: {path: /a}\n    expect: {response: {headers: {X-A: [1]}}}\n":          "single value",
+		"cases:\n  - request: {path: /a}\n    expect: {response: {body: {\"a\": 1}}}\n":             "must be a single value",
+		"cases:\n  - request: {path: \"/a b\"}\n    expect: {response: {status: 200}}\n":            "must be a path",
+		"cases:\n  - request: {path: nopath}\n    expect: {response: {status: 200}}\n":              "must be a path",
+		"cases:\n  - request: {path: /a, method: \"G T\"}\n    expect: {response: {status: 200}}\n": "not an HTTP method",
+		"cases:\n  - name: [x]\n    request: {path: /a}\n":                                          "name must be",
 	}
 	for src, want := range cases {
 		_, err := ParseFixture([]byte(src))

@@ -69,6 +69,13 @@ func TestParseValid(t *testing.T) {
 		{"crlf", "a: 1\r\nb: 2\r\n", "{a=1,b=2}"},
 		{"seq item map then key", "- a: 1\n  b: 2\n- c: 3\n", "[{a=1,b=2},{c=3}]"},
 		{"empty flow", "a: []\nb: {}\n", "{a=[],b={}}"},
+		{"literal with hash lines", "body: |\n  # Title\n  text # not a comment\n  #!/bin/sh\nnext: 1\n", "{body='# Title\ntext # not a comment\n#!/bin/sh\n',next=1}"},
+		{"literal first line hash", "b: |-\n  #x\n", "{b='#x'}"},
+		{"comment after literal", "b: |\n  x\n# done\nc: 1\n", "{b='x\n',c=1}"},
+		{"folded with hash", "t: >\n  # heading\n  more\n", "{t='# heading more\n'}"},
+		{"surrogate pair", "a: \"\\ud83d\\ude00\"\n", "{a='😀'}"},
+		{"dash quote is plain", "v: foo-'bar # c'\n", "{v=foo-'bar}"},
+		{"colon quote is plain", "v: a:'b'\n", "{v=a:'b'}"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -104,6 +111,9 @@ func TestParseErrors(t *testing.T) {
 		{"list in map", "a: 1\n- b\n", "line 2: a list item cannot appear here"},
 		{"bad escape", `a: "\q"`, "bad escape"},
 		{"flow trailing", "a: [1] x\n", "unexpected text"},
+		{"empty flow item", "a: [a, ,b]\n", "empty item"},
+		{"leading empty item", "a: [,b]\n", "empty item"},
+		{"lone surrogate", "a: \"\\ud800\"\n", "unpaired surrogate"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

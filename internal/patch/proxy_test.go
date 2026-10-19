@@ -364,7 +364,7 @@ func TestMalformedJSONPassesUnchanged(t *testing.T) {
 		if string(got.body) != body {
 			t.Fatalf("body %q came back as %q", body, got.body)
 		}
-		if e := lastEvent(t, h); e.Event != audit.Skipped || !strings.Contains(e.Reason, "not valid JSON") {
+		if e := lastEvent(t, h); e.Event != audit.Skipped || !strings.Contains(e.Reason, "changed safely") {
 			t.Fatalf("audit for %q = %+v", body, e)
 		}
 	}
@@ -537,7 +537,8 @@ func TestMalformedRequestBodyPassesUnchanged(t *testing.T) {
 		if got := rec.last(); string(got.body) != body {
 			t.Fatalf("request body %q arrived as %q", body, got.body)
 		}
-		if e := lastEvent(t, h); e.Event != audit.Skipped || e.Phase != "request" {
+		// The header changes still apply; only the JSON part is skipped.
+		if e := lastEvent(t, h); e.Event != audit.Changed || e.Phase != "request" || !strings.Contains(e.Reason, "changed safely") {
 			t.Fatalf("audit = %+v", e)
 		}
 	}
@@ -710,8 +711,13 @@ rules:
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { rec.add(r) }))
 	defer up.Close()
 	h := startProxy(t, cfg, up.URL, false)
+	do(t, "GET", h.proxyURL+"/api/v1/customer?id=a%20b", nil, nil)
+	if got := rec.last().uri; got != "/api/v2/customers/a%20b?id=a%20b" {
+		t.Fatalf("uri = %s", got)
+	}
+	// A value with a slash would add path segments, so it is refused.
 	do(t, "GET", h.proxyURL+"/api/v1/customer?id=a%2Fb", nil, nil)
-	if got := rec.last().uri; got != "/api/v2/customers/a%2Fb?id=a%2Fb" {
+	if got := rec.last().uri; got != "/api/v1/customer?id=a%2Fb" {
 		t.Fatalf("uri = %s", got)
 	}
 	do(t, "GET", h.proxyURL+"/api/v1/customer", nil, nil)

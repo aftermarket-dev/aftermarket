@@ -25,10 +25,10 @@ Unknown keys are errors, so a typo never fails silently. `aftermarket patch chec
 
 | Key | Default | Format |
 | --- | --- | --- |
-| `max_body` | `1MiB` | A byte count, or a number with `B`, `KB`, `MB`, `GB` (powers of 1000) or `KiB`, `MiB`, `GiB` (powers of 1024). |
+| `max_body` | `1MiB` | A byte count, or a number with `B`, `KB`, `MB`, `GB` (powers of 1000) or `KiB`, `MiB`, `GiB` (powers of 1024). At most `1GiB`. |
 | `upstream_timeout` | `30s` | A Go duration such as `500ms`, `30s` or `2m`. |
 
-A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`.
+A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`. The same happens when a response body that a rule needs to change doesn't arrive in full within `upstream_timeout` after the headers. Bodies no rule needs are streamed and have no time limit.
 
 ### when
 
@@ -39,13 +39,15 @@ Every condition you write must hold. Conditions you leave out match anything.
 | `method` | One method or a list. Case-insensitive. | `GET` or `[GET, HEAD]` |
 | `path` | The request path, as a glob. `*` matches within one segment, `**` matches across segments. Must start with `/`. | `/api/v1/customers/*` |
 | `query` | Each named parameter must be present with a value matching its glob. `"*"` means any value. | `{id: "*", format: json}` |
-| `headers` | Each named request header must have a value matching its glob. Names are case-insensitive. | `{User-Agent: "LegacyApp/*"}` |
+| `headers` | Each named request header must have a value matching its glob. Names are case-insensitive. `Host` can't be matched. | `{User-Agent: "LegacyApp/*"}` |
 | `status` | Response status codes or classes. | `200`, `[200, 201]`, `2xx` |
 | `content_type` | The response media type, without parameters, as a glob. Case-insensitive. | `application/json`, `application/*json` |
 
 In value globs, `*` matches any run of characters, including none.
 
 `when` always looks at the request as the client sent it, before any rule rewrote it. A rule that uses `status` or `content_type` can only have `response:` actions, because those are only known once the response arrives.
+
+A rule with a `path` condition never matches a request whose path has `.` or `..` segments or an encoded slash (`%2F`), such as `/public/../admin`. Upstream servers resolve those paths in different ways, so a glob can't say safely where they lead. Such requests still pass through, untouched by those rules.
 
 ### request actions
 
@@ -54,13 +56,17 @@ request:
   set_headers: {X-Client: legacy, Accept: application/json}
   remove_headers: [X-Debug]
   rewrite_path:
-    from: "^/api/v1/customer$"                  # Go regular expression, matched against the path
-    to: "/api/v2/customers/{query.id}"          # replacement; $1 and ${name} refer to groups
+    from: "^/api/v1/customer$"                  # Go regular expression, matched against the escaped path
+    to: "/api/v2/customers/{query.id}"          # replacement; $1, ${1} and ${name} refer to groups
   json:
     - rename: {from: qty, to: quantity}
 ```
 
-- `rewrite_path.to` can use `{query.NAME}`, which becomes the URL-escaped value of that query parameter. If the parameter is missing, the rewrite is not applied and the audit log says why. The query string itself is forwarded as it is.
+- `from` is matched against the path in its escaped form, as the client sent it (`%2F` stays `%2F`), and the result is forwarded in that form. Nothing is decoded twice.
+- `to` can use `{query.NAME}`, which becomes the URL-escaped value of that query parameter. If the parameter is missing, or its value is `.`, `..` or contains a slash, the rewrite is not applied and the audit log says why.
+- A rewrite whose result has `.` or `..` segments is not applied.
+- `to` changes the path only, so it can't contain `?` or `#`. The query string is forwarded exactly as the client sent it.
+- Every `$name` in `to` must be a group in `from`. Go reads `$1_detail` as a group called `1_detail`, so write `${1}_detail`, and `$$` for a literal `$`.
 - Request `json` operations only run when the request `Content-Type` is JSON (`application/json` or `*/*+json`).
 - If the upstream URL has a path (`--upstream http://host/base`), forwarded paths are joined onto it.
 
@@ -78,7 +84,9 @@ Response `json` operations only run on JSON responses that have a body. That rul
 
 ### Headers
 
-`set_headers` replaces every value of a header with one value. `remove_headers` deletes it. The proxy manages these headers itself, so rules can't set or remove them: `Content-Length`, `Transfer-Encoding`, `Content-Encoding`, `Host`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `TE`, `Trailer` and `Upgrade`.
+`set_headers` replaces every value of a header with one value. `remove_headers` deletes it. Header names must be valid HTTP tokens, and values can't contain control characters. The proxy manages these headers itself, so rules can't set or remove them: `Content-Length`, `Transfer-Encoding`, `Content-Encoding`, `Host`, `Connection`, `Keep-Alive`, `Proxy-Connection`, `Proxy-Authorization`, `Proxy-Authenticate`, `TE`, `Trailer` and `Upgrade`.
+
+The proxy forwards `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto` and `Forwarded` as the client sent them and doesn't add its own. Rules can set or remove them like any other header. Headers that the client lists in its `Connection` header are never forwarded.
 
 ### JSON operations
 
@@ -95,7 +103,9 @@ Operations run in the order written. Paths are dot-separated. A number selects a
 
 An operation that can't apply, such as a `rename` whose source is missing, is skipped and listed under `not_applied` in the audit log. The rest of the rule still runs.
 
-When at least one operation changes the body, it's written back as compact JSON. Other keys keep their order and numbers keep their original text. A gzip body is compressed again. `Content-Length` is set to the new length, and `ETag` and `Content-MD5` are removed.
+When at least one operation changes the body, it's written back as compact JSON. Other keys keep their order, values and numbers keep their original text. Strings keep their value, though an escape such as `\u00e9` may be written as the character itself. A gzip body is compressed again. `Content-Length` is set to the new length. `ETag`, `Content-MD5`, `Digest`, `Content-Digest` and `Repr-Digest` describe the old bytes, so they're removed, and so is a `Trailer` announcement.
+
+A body that wouldn't survive this unchanged is not touched at all and is logged as skipped. That covers invalid UTF-8, duplicate keys and unpaired `\ud800`-style escapes.
 
 ### Order
 
@@ -108,15 +118,15 @@ One JSON object per line.
 | Field | Meaning |
 | --- | --- |
 | `time` | UTC timestamp |
-| `event` | `changed`, `would_change` (dry run), `unchanged` (matched, nothing to do), `skipped` (matched, not safe to apply) or `upstream_error` |
+| `event` | `changed` (something changed), `would_change` (the same, in a dry run), `unchanged` (matched, nothing to do), `skipped` (matched, but nothing could be applied safely) or `upstream_error` |
 | `request` | A number shared by all events for one request |
 | `rule`, `phase` | Which rule, and whether it ran on the `request` or `response` |
 | `method`, `path`, `query_keys`, `status` | What the traffic was. `path` is the path the client sent. |
 | `actions` | What changed, such as `rename customer.id -> customer_id` or `set header X-Client` |
 | `not_applied` | Operations that matched but had nothing to do, with the reason |
-| `reason` | Why a rule was skipped, or the upstream error |
+| `reason` | Why the JSON part of a rule was skipped, or a fixed description of the upstream error |
 
-Values are never logged.
+Values are never logged. When a rule changes headers but has to skip its JSON operations, the event is `changed`, the JSON operations are listed under `not_applied`, and `reason` says why.
 
 ## Fixture file
 
