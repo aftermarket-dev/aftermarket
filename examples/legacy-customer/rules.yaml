@@ -1,0 +1,34 @@
+# AfterPatch rules for the legacy-customer example.
+#
+# The old client calls GET /api/v1/customer?id=N and expects
+#   {"customer_id": N, "name": "...", "email": "..."}
+# The new service answers GET /api/v2/customers/N with
+#   {"customer": {"id": N, "full_name": "...", "email": "...", "customer_since": "..."}}
+
+version: 1
+
+rules:
+  - id: v1-customer-path
+    description: Send the old v1 path to the new v2 endpoint.
+    when:
+      method: GET
+      path: /api/v1/customer
+      query: {id: "*"}
+    request:
+      rewrite_path:
+        from: "^/api/v1/customer$"
+        to: "/api/v2/customers/{query.id}"
+
+  - id: v1-customer-shape
+    description: Put the v2 answer back into the flat v1 shape.
+    when:
+      method: GET
+      path: /api/v1/customer
+      status: 200
+      content_type: application/json
+    response:
+      json:
+        - rename: {from: customer.id, to: customer_id}
+        - rename: {from: customer.full_name, to: name}
+        - rename: {from: customer.email, to: email}
+        - delete: {path: customer}

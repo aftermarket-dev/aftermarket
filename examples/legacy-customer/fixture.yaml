@@ -1,0 +1,44 @@
+# Run with:
+#   aftermarket patch test --config rules.yaml --fixture fixture.yaml
+
+cases:
+  - name: old path reaches the new endpoint
+    request:
+      method: GET
+      path: /api/v1/customer?id=7
+    upstream:
+      status: 200
+      headers: {Content-Type: application/json}
+      body: '{"customer":{"id":7,"full_name":"Ada Lovelace","email":"ada@example.com","customer_since":"2019-03-01"}}'
+    expect:
+      upstream_request:
+        method: GET
+        path: /api/v2/customers/7?id=7
+      response:
+        status: 200
+        body: '{"customer_id":7,"name":"Ada Lovelace","email":"ada@example.com"}'
+
+  - name: a missing customer passes through untouched
+    request:
+      path: /api/v1/customer?id=999
+    upstream:
+      status: 404
+      headers: {Content-Type: application/json}
+      body: '{"error":"customer not found"}'
+    expect:
+      response:
+        status: 404
+        body: '{"error":"customer not found"}'
+
+  - name: other paths are left alone
+    request:
+      path: /api/v2/customers/7
+    upstream:
+      status: 200
+      headers: {Content-Type: application/json}
+      body: '{"customer":{"id":7}}'
+    expect:
+      upstream_request:
+        path: /api/v2/customers/7
+      response:
+        body: '{"customer":{"id":7}}'

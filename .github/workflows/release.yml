@@ -1,0 +1,181 @@
+# Publishes a release when internal/version/version.go holds a version that
+# has no tag yet and CI has passed on that commit. Versions ending in -dev are
+# never released. Nothing is published unless every build and smoke test
+# passes. Archive names carry no version, so
+# https://github.com/aftermarket-dev/aftermarket/releases/latest/download/<archive>
+# always points at the newest release.
+#
+# Run it by hand with a tag to rebuild the files of an existing release.
+
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to rebuild (for example v0.1.0); leave empty to release the version on main
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+      ref: ${{ steps.plan.outputs.ref }}
+      rebuild: ${{ steps.plan.outputs.rebuild }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - id: plan
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
+          ref=$(git rev-parse HEAD)
+          rebuild=false
+          release=true
+          if [ -n "$TAG" ]; then
+            if [ "v$version" != "$TAG" ]; then
+              echo "tag $TAG holds version $version"; exit 1
+            fi
+            rebuild=true
+          elif [[ "$version" == *-* ]]; then
+            echo "version $version is a development version; nothing to release"
+            release=false
+          elif git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already tagged; nothing to release"
+            release=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "rebuild=$rebuild" >> "$GITHUB_OUTPUT"
+          echo "version $version at $ref, release=$release, rebuild=$rebuild"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build archives
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}
+            name=aftermarket_${os}_${arch}
+            work=$(mktemp -d)/$name
+            mkdir -p "$work"
+            exe=aftermarket; [ "$os" = windows ] && exe=aftermarket.exe
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "-s -w" -o "$work/$exe" ./cmd/aftermarket
+            cp LICENSE NOTICE README.md THIRD_PARTY_LICENSES.md "$work/"
+            mkdir -p "$work/examples/legacy-customer"
+            cp examples/legacy-customer/rules.yaml examples/legacy-customer/fixture.yaml "$work/examples/legacy-customer/"
+            if [ "$os" = windows ]; then
+              (cd "$(dirname "$work")" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
+            else
+              tar -C "$(dirname "$work")" -czf "dist/$name.tar.gz" "$name"
+            fi
+          done
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  smoke:
+    needs: [plan, build]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-latest
+            archive: aftermarket_linux_amd64.tar.gz
+          - os: macos-latest
+            archive: aftermarket_darwin_arm64.tar.gz
+          - os: windows-latest
+            archive: aftermarket_windows_amd64.zip
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Unpack and run
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          ARCHIVE: ${{ matrix.archive }}
+        run: |
+          set -euo pipefail
+          mkdir smoke && cd smoke
+          case "$ARCHIVE" in
+            *.zip) unzip -q "../dist/$ARCHIVE" ;;
+            *) tar -xzf "../dist/$ARCHIVE" ;;
+          esac
+          dir=${ARCHIVE%.tar.gz}; dir=${dir%.zip}
+          cd "$dir"
+          bin=./aftermarket; [ -f aftermarket.exe ] && bin=./aftermarket.exe
+          out=$("$bin" version | tr -d '\r')
+          echo "$out"
+          [ "$out" = "aftermarket $VERSION" ]
+          "$bin" patch check --config examples/legacy-customer/rules.yaml
+          "$bin" patch test --config examples/legacy-customer/rules.yaml --fixture examples/legacy-customer/fixture.yaml
+
+  publish:
+    needs: [plan, build, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Tag and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          REF: ${{ needs.plan.outputs.ref }}
+          REBUILD: ${{ needs.plan.outputs.rebuild }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          notes="docs/releases/$VERSION.md"
+          if [ ! -f "$notes" ]; then
+            notes=$(mktemp)
+            echo "Aftermarket $tag. See the README for what is included." > "$notes"
+          fi
+          if [ "$REBUILD" = true ]; then
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" dist/* --target "$REF" --title "Aftermarket $tag" --notes-file "$notes" --latest
+          fi
+          gh release view "$tag"
