@@ -60,4 +60,12 @@ AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterli
 ## Status
 
 - Oct 19 2026: plan approved. Site cleaned and aligned with this plan. Repo initialised with LICENSE, NOTICE and this file.
-- Next session starts at: 0.1.0 AfterPatch. Set up the Go module, CI and the release workflow, then build the proxy against `examples/legacy-customer`.
+- Oct 19 2026: 0.1.0 AfterPatch built. Independent review found 24 issues (query strings dropped, path rewrite traversal, header handling, YAML block scalars, release workflow gaps and more); all fixed, each with a regression test. Results recorded in test/results. Version raised to 0.1.0 for the automated release.
+- Deviation from the plan, agreed in chat: no YAML library (Go modules could not be downloaded in the workspace); internal/yamlite reads the YAML subset the files need, so there are zero third-party dependencies.
+- Health check lives at /_aftermarket/healthz (not /healthz) so it never hides an upstream path.
+
+## Next
+
+1. Confirm the 0.1.0 release: all archives, SHA256SUMS, releases/latest/download links, run a downloaded binary.
+2. Site: publish quick start, download and reference pages and the release posts; suggest adding Aftermarket to softdevstudio.com.
+3. 0.2.0 AfterAPI (`aftermarket adapt`), as planned above. Agree the details with the owner first.
