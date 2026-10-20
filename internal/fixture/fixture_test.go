@@ -1,11 +1,21 @@
-package patch
+package fixture_test
 
 import (
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
+	"github.com/aftermarket-dev/aftermarket/internal/fixture"
+	"github.com/aftermarket-dev/aftermarket/internal/patch"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
 )
+
+func patchHandler(cfg *rules.Config) fixture.NewHandler {
+	return func(u *url.URL) (http.Handler, error) {
+		return patch.New(patch.Options{Upstream: u, Config: cfg})
+	}
+}
 
 func TestFixtureReportsFailures(t *testing.T) {
 	cfg, err := rules.Load([]byte(`
@@ -17,7 +27,7 @@ rules:
 	if err != nil {
 		t.Fatal(err)
 	}
-	fx, err := ParseFixture([]byte(`
+	fx, err := fixture.Parse([]byte(`
 cases:
   - name: passes
     request: {path: /a}
@@ -37,7 +47,7 @@ cases:
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := RunFixture(cfg, fx)
+	res := fixture.Run(patchHandler(cfg), fx)
 	if !res[0].Pass {
 		t.Fatalf("case 1 should pass: %v", res[0].Problems)
 	}
@@ -63,9 +73,9 @@ func TestFixtureErrors(t *testing.T) {
 		"cases:\n  - name: [x]\n    request: {path: /a}\n":                                          "name must be",
 	}
 	for src, want := range cases {
-		_, err := ParseFixture([]byte(src))
+		_, err := fixture.Parse([]byte(src))
 		if err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("ParseFixture(%q) = %v, want error containing %q", src, err, want)
+			t.Errorf("fixture.Parse(%q) = %v, want error containing %q", src, err, want)
 		}
 	}
 }

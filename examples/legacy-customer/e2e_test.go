@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	legacycustomer "github.com/aftermarket-dev/aftermarket/examples/legacy-customer"
+	"github.com/aftermarket-dev/aftermarket/internal/fixture"
 	"github.com/aftermarket-dev/aftermarket/internal/patch"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
 )
@@ -84,11 +85,11 @@ func TestFixtureFilePasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fx, err := patch.LoadFixture("fixture.yaml")
+	fx, err := fixture.Load("fixture.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range patch.RunFixture(cfg, fx) {
+	for _, r := range fixture.Run(patch.FixtureHandler(cfg), fx) {
 		if !r.Pass {
 			t.Errorf("%s: %v", r.Name, r.Problems)
 		}

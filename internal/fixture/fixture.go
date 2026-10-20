@@ -1,4 +1,7 @@
-package patch
+// Package fixture runs saved requests and responses through an Aftermarket
+// proxy against a stand-in upstream and compares what comes out. It backs
+// `aftermarket patch test` and `aftermarket adapt test`.
+package fixture
 
 import (
 	"encoding/json"
@@ -14,16 +17,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/aftermarket-dev/aftermarket/internal/rules"
 	"github.com/aftermarket-dev/aftermarket/internal/yamlite"
 )
 
-// Fixture is a set of cases for `aftermarket patch test`.
+// Fixture is a set of test cases.
 type Fixture struct {
 	Cases []Case
 }
 
-// Case sends one request through the rules to a stand-in upstream.
+// Case sends one request through the proxy to a stand-in upstream.
 type Case struct {
 	Name     string
 	Line     int
@@ -44,17 +46,17 @@ type Message struct {
 	Body    *string
 }
 
-// LoadFixture reads a fixture file.
-func LoadFixture(path string) (*Fixture, error) {
+// Load reads a fixture file.
+func Load(path string) (*Fixture, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return ParseFixture(data)
+	return Parse(data)
 }
 
-// ParseFixture parses fixture YAML.
-func ParseFixture(data []byte) (*Fixture, error) {
+// Parse parses fixture YAML.
+func Parse(data []byte) (*Fixture, error) {
 	root, err := yamlite.Parse(data)
 	if err != nil {
 		return nil, err
@@ -216,11 +218,14 @@ type CaseResult struct {
 	Problems []string
 }
 
-// RunFixture runs every case through the rules in cfg.
-func RunFixture(cfg *rules.Config, f *Fixture) []CaseResult {
+// NewHandler builds the proxy under test, pointed at the stand-in upstream.
+type NewHandler func(upstream *url.URL) (http.Handler, error)
+
+// Run runs every case through a proxy made by newHandler.
+func Run(newHandler NewHandler, f *Fixture) []CaseResult {
 	var out []CaseResult
 	for _, c := range f.Cases {
-		out = append(out, runCase(cfg, c))
+		out = append(out, runCase(newHandler, c))
 	}
 	return out
 }
@@ -232,7 +237,7 @@ type seenRequest struct {
 	body   []byte
 }
 
-func runCase(cfg *rules.Config, c Case) CaseResult {
+func runCase(newHandler NewHandler, c Case) CaseResult {
 	res := CaseResult{Name: c.Name}
 	var mu sync.Mutex
 	var seen *seenRequest
@@ -251,7 +256,7 @@ func runCase(cfg *rules.Config, c Case) CaseResult {
 	}))
 	defer up.Close()
 	u, _ := url.Parse(up.URL)
-	px, err := New(Options{Upstream: u, Config: cfg})
+	px, err := newHandler(u)
 	if err != nil {
 		res.Problems = append(res.Problems, err.Error())
 		return res

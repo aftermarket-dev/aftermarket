@@ -4,24 +4,19 @@
 package patch
 
 import (
-	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync/atomic"
-	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/audit"
+	"github.com/aftermarket-dev/aftermarket/internal/httpx"
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
 )
@@ -72,21 +67,9 @@ func New(opts Options) (*Proxy, error) {
 		return nil, errors.New("no rules loaded")
 	}
 	p := &Proxy{opts: opts}
-	tr := opts.Transport
+	var tr http.RoundTripper = opts.Transport
 	if tr == nil {
-		tr = &http.Transport{
-			Proxy:                 nil,
-			DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          256,
-			MaxIdleConnsPerHost:   64,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: opts.Config.UpstreamTimeout,
-			ExpectContinueTimeout: 1 * time.Second,
-			// Pass bodies through exactly as the upstream sent them.
-			DisableCompression: true,
-		}
+		tr = httpx.NewTransport(opts.Config.UpstreamTimeout)
 	}
 	p.rp = &httputil.ReverseProxy{
 		Rewrite:        p.rewrite,
@@ -105,28 +88,10 @@ func (p *Proxy) eventKind() string {
 	return audit.Changed
 }
 
-// unsafePath reports whether a path contains "." or ".." segments or an
-// encoded slash. Upstreams often resolve these differently from a glob, so
-// rules with a path condition never match such requests.
-func unsafePath(u *url.URL) bool {
-	if strings.Contains(strings.ToLower(u.EscapedPath()), "%2f") {
-		return true
-	}
-	for _, seg := range strings.Split(u.Path, "/") {
-		if seg == "." || seg == ".." {
-			return true
-		}
-	}
-	return false
-}
-
 // ServeHTTP handles one request.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.opts.HealthPath != "" && r.URL.Path == p.opts.HealthPath {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
+		httpx.WriteHealth(w)
 		return
 	}
 	st := &state{
@@ -141,7 +106,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(st.queryKeys)
 
-	pathUnsafe := unsafePath(r.URL)
+	pathUnsafe := httpx.UnsafePath(r.URL)
 	for _, rule := range p.opts.Config.Rules {
 		if rule.When.PathGlob != "" && pathUnsafe {
 			continue
@@ -233,36 +198,21 @@ func (p *Proxy) requestPhase(pr *httputil.ProxyRequest, st *state) {
 			needBody = true
 		}
 	}
-	var br *bodyRead
-	var doc any
-	decoded := false
+	var jb httpx.JSONBody
 	bodySkip := ""
 	if needBody {
 		switch {
-		case !isJSONType(out.Header.Get("Content-Type")):
+		case !httpx.IsJSON(out.Header.Get("Content-Type")):
 			bodySkip = "request body is not JSON"
 		case out.Body == nil || out.Body == http.NoBody:
 			bodySkip = "request has no body"
 		default:
-			var err error
-			br, err = readBody(out.Body, p.opts.Config.MaxBody)
-			out.Body = br.restore() // the original bytes stay available either way
-			switch {
-			case errors.Is(err, errTooLarge):
-				bodySkip = "request body is larger than max_body"
-			case err != nil:
-				bodySkip = "request body could not be read"
-			default:
-				if reason, ok := br.decode(out.Header.Get("Content-Encoding"), p.opts.Config.MaxBody); !ok {
-					bodySkip = reason
-				} else if d, err := ojson.Decode(br.plain); err != nil {
-					bodySkip = "request body is not JSON that can be changed safely (" + err.Error() + ")"
-				} else {
-					doc, decoded = d, true
-				}
-			}
+			// Requests have no read deadline: the server's own timeouts apply.
+			jb, out.Body, _ = httpx.ReadJSON(out.Body, out.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, 0, "request")
+			bodySkip = jb.Skip
 		}
 	}
+	doc, decoded := jb.Doc, jb.OK
 
 	newPath := escPath
 	bodyChanged := false
@@ -306,20 +256,13 @@ func (p *Proxy) requestPhase(pr *httputil.ProxyRequest, st *state) {
 	if newPath != escPath {
 		plain, err := url.PathUnescape(newPath)
 		if err == nil {
-			out.URL.Path = joinPath(p.opts.Upstream.Path, plain)
-			out.URL.RawPath = joinPath(p.opts.Upstream.EscapedPath(), newPath)
+			out.URL.Path = httpx.JoinPath(p.opts.Upstream.Path, plain)
+			out.URL.RawPath = httpx.JoinPath(p.opts.Upstream.EscapedPath(), newPath)
 		}
 	}
 	if bodyChanged {
-		plain, err := ojson.Encode(doc)
-		if err == nil {
-			body := encodeBody(plain, br.gzipped)
-			out.Body = ioNop(body)
-			out.ContentLength = int64(len(body))
-			out.Header.Set("Content-Length", strconv.Itoa(len(body)))
-			out.TransferEncoding = nil
-			out.GetBody = nil
-			dropBodyValidators(out.Header)
+		if plain, err := ojson.Encode(doc); err == nil {
+			httpx.SetRequestBody(out, httpx.Encode(plain, jb.Body.Gzipped))
 		}
 	}
 }
@@ -338,7 +281,7 @@ func rewritePath(rw *rules.Rewrite, escPath string, query url.Values) (string, s
 			return escPath, desc + " (query parameter " + name + " missing)", false
 		}
 		v := vals[0]
-		if v == "." || v == ".." || strings.ContainsAny(v, "/\\") {
+		if !httpx.SafeSegment(v) {
 			return escPath, desc + " (query parameter " + name + " is not a safe path segment)", false
 		}
 		to = strings.ReplaceAll(to, "{query."+name+"}", strings.ReplaceAll(url.PathEscape(v), "$", "$$"))
@@ -357,51 +300,6 @@ func rewritePath(rw *rules.Rewrite, escPath string, query url.Values) (string, s
 		}
 	}
 	return np, desc, true
-}
-
-func joinPath(base, p string) string {
-	if base == "" || base == "/" {
-		return p
-	}
-	return strings.TrimSuffix(base, "/") + p
-}
-
-// dropBodyValidators removes headers that describe the old body bytes.
-func dropBodyValidators(h http.Header) {
-	for _, k := range []string{"Etag", "Content-Md5", "Digest", "Content-Digest", "Repr-Digest"} {
-		h.Del(k)
-	}
-}
-
-// bodyTimeoutError is returned when a body a rule needs does not arrive within
-// upstream_timeout.
-type bodyTimeoutError struct{}
-
-func (bodyTimeoutError) Error() string   { return "upstream body did not arrive within upstream_timeout" }
-func (bodyTimeoutError) Timeout() bool   { return true }
-func (bodyTimeoutError) Temporary() bool { return true }
-
-// readBodyWithin is readBody with a deadline. On timeout the body is closed.
-func readBodyWithin(body io.ReadCloser, max int64, d time.Duration) (*bodyRead, error) {
-	type result struct {
-		br  *bodyRead
-		err error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		br, err := readBody(body, max)
-		ch <- result{br, err}
-	}()
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case r := <-ch:
-		return r.br, r.err
-	case <-t.C:
-		_ = body.Close()
-		<-ch
-		return nil, bodyTimeoutError{}
-	}
 }
 
 // modifyResponse applies response rules.
@@ -431,39 +329,26 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 			needBody = true
 		}
 	}
-	var br *bodyRead
-	var doc any
-	decoded := false
+	var jb httpx.JSONBody
 	bodySkip := ""
 	if needBody {
 		switch {
 		case st.method == http.MethodHead || resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified || resp.StatusCode < 200:
 			bodySkip = "response has no body"
-		case !isJSONType(resp.Header.Get("Content-Type")):
+		case !httpx.IsJSON(resp.Header.Get("Content-Type")):
 			bodySkip = "response body is not JSON"
 		default:
+			var restored io.ReadCloser
 			var err error
-			br, err = readBodyWithin(resp.Body, p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout)
-			if errors.As(err, &bodyTimeoutError{}) {
-				return err // answered with 504 by errorHandler
+			jb, restored, err = httpx.ReadJSON(resp.Body, resp.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout, "response")
+			if err != nil {
+				return err // answered with 504 by errorHandler; the proxy closes the old body
 			}
-			resp.Body = br.restore()
-			switch {
-			case errors.Is(err, errTooLarge):
-				bodySkip = "response body is larger than max_body"
-			case err != nil:
-				bodySkip = "response body could not be read"
-			default:
-				if reason, ok := br.decode(resp.Header.Get("Content-Encoding"), p.opts.Config.MaxBody); !ok {
-					bodySkip = reason
-				} else if d, err := ojson.Decode(br.plain); err != nil {
-					bodySkip = "response body is not JSON that can be changed safely (" + err.Error() + ")"
-				} else {
-					doc, decoded = d, true
-				}
-			}
+			resp.Body = restored
+			bodySkip = jb.Skip
 		}
 	}
+	doc, decoded := jb.Doc, jb.OK
 
 	bodyChanged := false
 	for _, rule := range matched {
@@ -487,71 +372,20 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	}
 
 	if bodyChanged && !p.opts.DryRun {
-		plain, err := ojson.Encode(doc)
-		if err == nil {
-			out := encodeBody(plain, br.gzipped)
-			resp.Body = ioNop(out)
-			resp.ContentLength = int64(len(out))
-			resp.Header.Set("Content-Length", strconv.Itoa(len(out)))
-			resp.TransferEncoding = nil
-			// Trailers announced for the old chunked body cannot follow a
-			// body with a length.
-			resp.Header.Del("Trailer")
-			resp.Trailer = nil
-			dropBodyValidators(resp.Header)
+		if plain, err := ojson.Encode(doc); err == nil {
+			httpx.SetResponseBody(resp, httpx.Encode(plain, jb.Body.Gzipped))
 		}
 	}
 	return nil
 }
 
-func ioNop(b []byte) *nopBody { return &nopBody{Reader: bytes.NewReader(b)} }
-
-type nopBody struct{ *bytes.Reader }
-
-func (nopBody) Close() error { return nil }
-
-// upstreamReason turns an upstream error into a fixed description, so error
-// text (which can quote upstream bytes) never reaches the audit log.
-func upstreamReason(err error) (int, string) {
-	var ne net.Error
-	if errors.As(err, &bodyTimeoutError{}) {
-		return http.StatusGatewayTimeout, "upstream body did not arrive within upstream_timeout"
-	}
-	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
-		return http.StatusGatewayTimeout, "upstream did not answer within upstream_timeout"
-	}
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		return http.StatusBadGateway, "upstream host name could not be resolved"
-	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) && opErr.Op == "dial" {
-		return http.StatusBadGateway, "could not connect to upstream"
-	}
-	var certErr *tls.CertificateVerificationError
-	var unknownAuth x509.UnknownAuthorityError
-	var hostErr x509.HostnameError
-	var recErr tls.RecordHeaderError
-	if errors.As(err, &certErr) || errors.As(err, &unknownAuth) || errors.As(err, &hostErr) || errors.As(err, &recErr) {
-		return http.StatusBadGateway, "TLS error talking to upstream"
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return http.StatusBadGateway, "upstream closed the connection"
-	}
-	return http.StatusBadGateway, "upstream sent a response that could not be read"
-}
-
 // errorHandler answers when the upstream cannot be reached in time.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	st, _ := r.Context().Value(ctxKey{}).(*state)
-	if errors.Is(r.Context().Err(), context.Canceled) {
+	if httpx.ClientGone(r) {
 		return // the client went away; nobody to answer
 	}
-	status, reason := upstreamReason(err)
-	msg := "aftermarket: upstream unreachable\n"
-	if status == http.StatusGatewayTimeout {
-		msg = "aftermarket: upstream timed out\n"
-	}
+	status, reason := httpx.UpstreamReason(err)
 	if st != nil {
 		p.opts.Audit.Write(audit.Event{
 			Event:     audit.UpstreamError,
@@ -563,8 +397,13 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 			Reason:    reason,
 		})
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("X-Aftermarket-Error", strconv.Itoa(status))
-	w.WriteHeader(status)
-	_, _ = w.Write([]byte(msg))
+	httpx.WriteUpstreamError(w, status)
+}
+
+// FixtureHandler returns a constructor for `aftermarket patch test`: a
+// proxy with cfg, pointed at the fixture's stand-in upstream.
+func FixtureHandler(cfg *rules.Config) func(*url.URL) (http.Handler, error) {
+	return func(u *url.URL) (http.Handler, error) {
+		return New(Options{Upstream: u, Config: cfg})
+	}
 }

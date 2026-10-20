@@ -1,112 +1,11 @@
 package patch
 
 import (
-	"bytes"
-	"compress/gzip"
-	"errors"
-	"io"
-	"mime"
 	"net/http"
-	"strings"
 
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
 )
-
-// isJSONType reports whether a Content-Type names JSON.
-func isJSONType(ct string) bool {
-	mt, _, err := mime.ParseMediaType(ct)
-	if err != nil {
-		mt = strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
-	}
-	return mt == "application/json" || strings.HasSuffix(mt, "+json")
-}
-
-// bodyRead is the outcome of buffering a body that a rule wants to change.
-type bodyRead struct {
-	raw     []byte // bytes exactly as received (possibly compressed)
-	plain   []byte // decoded bytes
-	gzipped bool
-	// rest is set when the body was larger than the limit: raw holds the
-	// first part and rest the remainder, still unread.
-	rest io.ReadCloser
-}
-
-// restore returns a body that yields exactly the original bytes.
-func (b *bodyRead) restore() io.ReadCloser {
-	if b.rest != nil {
-		return &multiCloser{Reader: io.MultiReader(bytes.NewReader(b.raw), b.rest), c: b.rest}
-	}
-	return io.NopCloser(bytes.NewReader(b.raw))
-}
-
-type multiCloser struct {
-	io.Reader
-	c io.Closer
-}
-
-func (m *multiCloser) Close() error { return m.c.Close() }
-
-var errTooLarge = errors.New("body is larger than max_body")
-
-// readBody buffers up to max bytes of body. On errTooLarge the returned
-// bodyRead can still restore the full original stream.
-func readBody(body io.ReadCloser, max int64) (*bodyRead, error) {
-	br := &bodyRead{}
-	if body == nil || body == http.NoBody {
-		return br, nil
-	}
-	buf, err := io.ReadAll(io.LimitReader(body, max+1))
-	br.raw = buf
-	if err != nil {
-		br.rest = body
-		return br, err
-	}
-	if int64(len(buf)) > max {
-		br.rest = body
-		return br, errTooLarge
-	}
-	_ = body.Close()
-	return br, nil
-}
-
-// decode undoes Content-Encoding. Only identity and gzip are supported.
-func (b *bodyRead) decode(encoding string, max int64) (string, bool) {
-	enc := strings.ToLower(strings.TrimSpace(encoding))
-	switch enc {
-	case "", "identity":
-		b.plain = b.raw
-		return "", true
-	case "gzip", "x-gzip":
-		zr, err := gzip.NewReader(bytes.NewReader(b.raw))
-		if err != nil {
-			return "gzip body could not be read", false
-		}
-		plain, err := io.ReadAll(io.LimitReader(zr, max+1))
-		if err != nil {
-			return "gzip body could not be read", false
-		}
-		if int64(len(plain)) > max {
-			return "decompressed body is larger than max_body", false
-		}
-		b.plain = plain
-		b.gzipped = true
-		return "", true
-	}
-	return "content encoding " + enc + " is not supported for JSON changes", false
-}
-
-// encodeBody re-applies the content encoding to new plain bytes.
-func encodeBody(plain []byte, gzipped bool) []byte {
-	if !gzipped {
-		return plain
-	}
-	var buf bytes.Buffer
-	zw := gzip.NewWriter(&buf)
-	_, _ = zw.Write(plain)
-	_ = zw.Close()
-	return buf.Bytes()
-}
 
 // opResult describes what happened to one rule's JSON operations.
 type opResult struct {

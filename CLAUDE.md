@@ -48,8 +48,17 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
   - legacy client fails without the rule and passes with it
 - Site at 0.1.0: quick start, download and reference pages; posts for the launch, a plain explainer of the software aftermarket, how it was tested, and the name; diagram redrawn from the real flow; badge and figures from `test/results`. Suggest adding Aftermarket to softdevstudio.com.
 
-### 0.2.0 AfterAPI
-`aftermarket adapt`: endpoint remap with path parameters, request body transform, response reconstruction, header renaming (no credential handling). Then a decision with the owner: stay a subcommand or split out.
+### 0.2.0 AfterAPI (details approved Oct 20 2026)
+`aftermarket adapt`: one mapping per old endpoint, describing the old API in terms of the new one.
+- Endpoint mapping: path and query parameters move into the new path; the method can change.
+- Request templates build the new request body from the old one; response templates rebuild the old response shape from the new one (fields not named are dropped).
+- Status and error mapping (e.g. the new `{"error": {...}}` into the old `{"message": ...}`).
+- Header renames; no credential handling.
+- Same safety rules as AfterPatch: dry run, audit log, `adapt check`, `adapt test` with fixtures, pass-through for anything no mapping covers.
+- Promise test: an old client written against the v1 contract passes its full test suite against only the v2 service.
+- Template syntax: `$.customer.id`-style paths (a tiny subset of JSONPath); nothing more planned.
+- Out of scope: fan-out (one old call needing several new calls); kept for later.
+- `adapt` stays a subcommand of the same binary; split it out only if the code shows a real reason.
 
 ### 0.3.0 AfterTest and AfterDiff
 `aftermarket record` captures traffic through the proxy into redacted fixtures. `aftermarket replay` sends fixtures to two upstreams and writes a semantic diff report.
@@ -63,9 +72,8 @@ AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterli
 - Oct 19 2026: 0.1.0 AfterPatch built. Independent review found 24 issues (query strings dropped, path rewrite traversal, header handling, YAML block scalars, release workflow gaps and more); all fixed, each with a regression test. Results recorded in test/results. Version raised to 0.1.0 for the automated release.
 - Deviation from the plan, agreed in chat: no YAML library (Go modules could not be downloaded in the workspace); internal/yamlite reads the YAML subset the files need, so there are zero third-party dependencies.
 - Health check lives at /_aftermarket/healthz (not /healthz) so it never hides an upstream path.
+- Oct 19 2026: 0.1.0 released and verified (all archives, SHA256SUMS, latest links, downloaded binary run as a live proxy). Site published with quick start, download, reference and release posts. Aftermarket added to softdevstudio.com as the twenty-third project.
 
 ## Next
 
-1. Confirm the 0.1.0 release: all archives, SHA256SUMS, releases/latest/download links, run a downloaded binary.
-2. Site: publish quick start, download and reference pages and the release posts; suggest adding Aftermarket to softdevstudio.com.
-3. 0.2.0 AfterAPI (`aftermarket adapt`), as planned above. Agree the details with the owner first.
+1. 0.2.0 AfterAPI (`aftermarket adapt`), as approved above.

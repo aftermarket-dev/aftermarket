@@ -925,3 +925,25 @@ func targets(a *Actions) map[string]bool {
 	}
 	return t
 }
+
+// ValidHeaderName reports whether s is an HTTP header field name.
+func ValidHeaderName(s string) bool { return validHeaderName(s) }
+
+// ValidHeaderValue reports whether s is safe as a header value.
+func ValidHeaderValue(s string) bool { return validHeaderValue(s) }
+
+// ManagedHeader reports whether the proxy manages a header itself, so rules
+// may not set, remove or rename it. name must be in canonical form.
+func ManagedHeader(name string) bool { return managedHeaders[name] }
+
+// GlobMatch matches a value glob where "*" matches any run of characters.
+func GlobMatch(glob, s string) bool { return globMatch(glob, s) }
+
+// ParseStatus reads a status code such as 200.
+func ParseStatus(s string) (int, error) {
+	sm, err := parseStatus(s)
+	if err != nil || sm.Code == 0 {
+		return 0, fmt.Errorf("status %q must be a code such as 200", s)
+	}
+	return sm.Code, nil
+}

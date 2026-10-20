@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/audit"
+	"github.com/aftermarket-dev/aftermarket/internal/fixture"
 	"github.com/aftermarket-dev/aftermarket/internal/patch"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
 	"github.com/aftermarket-dev/aftermarket/internal/version"
@@ -134,7 +135,7 @@ func patchCheck(args []string, stdout, stderr io.Writer) int {
 func patchTest(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("aftermarket patch test", stderr)
 	config := fs.String("config", "", "rule file")
-	fixture := fs.String("fixture", "", "fixture file with cases")
+	fixturePath := fs.String("fixture", "", "fixture file with cases")
 	if fs.Parse(args) != nil {
 		return 2
 	}
@@ -142,17 +143,17 @@ func patchTest(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
-	if *fixture == "" {
+	if *fixturePath == "" {
 		fmt.Fprintln(stderr, "aftermarket: --fixture is required")
 		return 2
 	}
-	fx, err := patch.LoadFixture(*fixture)
+	fx, err := fixture.Load(*fixturePath)
 	if err != nil {
-		fmt.Fprintf(stderr, "%s: %v\n", *fixture, err)
+		fmt.Fprintf(stderr, "%s: %v\n", *fixturePath, err)
 		return 1
 	}
 	failed := 0
-	for _, r := range patch.RunFixture(cfg, fx) {
+	for _, r := range fixture.Run(patch.FixtureHandler(cfg), fx) {
 		if r.Pass {
 			fmt.Fprintf(stdout, "PASS  %s\n", r.Name)
 			continue
