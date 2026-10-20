@@ -85,8 +85,9 @@ AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterli
 
 - Oct 20 2026: 0.3.0 AfterTest and AfterDiff built (internal/record, internal/replay, `record`, `record check`, `replay`). Independent review found 1 high issue (101 upgrades broke through record) and 10 medium/low ones (query redaction missed `;`, empty absolute-form paths broke the fixture, JSON without a JSON Content-Type wasn't redacted, upstream URL secrets in the file header and reports, max_cases skips not logged, wrong request id on upstream errors, non-UTF-8 headers stored altered, loose big-number comparison, a replay comparing nothing passed, a busy port left an empty fixture) plus test gaps; all fixed with regression tests. Credential query keys (access_token, api_key, apikey, client_secret, password, sig, signature, token) are now redacted by default. 272 tests recorded. Version raised to 0.3.0 for the automated release.
 
+- Oct 20 2026: CI on ubuntu-latest (moving to Ubuntu 26 from Oct 19) failed in patch's random pass-through test, in the test's direct call to its own server, not through the proxy; the same seed passes locally. CI pinned to ubuntu-24.04, and CI now copies test failures into annotations, since job logs can't be downloaded from this workspace. Revisit the pin when Ubuntu 26 settles.
+- Oct 20 2026: 0.3.0 released and verified (all archives, SHA256SUMS, latest links, downloaded binary ran record check and the live loop: the client suite recorded through record against v1, replayed 12 of 12 the same against v2 through adapt and 12 of 12 different against v2 directly). Site: AfterTest and AfterDiff reference page (/record-reference/), quick start part three, roadmap, concepts, release and testing posts, hero badge and figures from test/results. softdevstudio.com note published.
+
 ## Next
 
-1. Confirm the 0.3.0 release (archives, SHA256SUMS, latest links, a downloaded binary running record check and a live record and replay).
-2. Site: AfterTest and AfterDiff reference page, quick start part three, release and testing posts, roadmap and concepts status; a softdevstudio.com note.
-3. After 0.3.0 the approved plan is done. What comes next (AfterGuard, AfterHook, AfterConfig or something else) is decided with the owner; nothing is started until then.
+The approved plan is done as of 0.3.0. What comes next (AfterGuard, AfterHook, AfterConfig or something else) is decided with the owner; nothing is started until then.
