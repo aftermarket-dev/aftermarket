@@ -1,0 +1,88 @@
+# Run with:
+#   aftermarket adapt test --config adapt.yaml --fixture fixture.yaml
+
+cases:
+  - name: a v1 lookup reaches v2 and comes back in the v1 shape
+    request:
+      path: /api/v1/customer?id=7
+    upstream:
+      status: 200
+      headers: {Content-Type: application/json, X-Api-Version: "2"}
+      body: '{"customer":{"id":7,"full_name":"Ada Lovelace","email":"ada@example.com","customer_since":"2019-03-01"}}'
+    expect:
+      upstream_request:
+        method: GET
+        path: /api/v2/customers/7
+      response:
+        status: 200
+        headers: {X-Api-Version: ""}
+        body: '{"customer_id":7,"name":"Ada Lovelace","email":"ada@example.com"}'
+
+  - name: a v2 error becomes a v1 error
+    request:
+      path: /api/v1/customer?id=999
+    upstream:
+      status: 404
+      headers: {Content-Type: application/json}
+      body: '{"error":{"code":"not_found","message":"customer not found"}}'
+    expect:
+      response:
+        status: 404
+        body: '{"message":"customer not found"}'
+
+  - name: create maps the body both ways and 201 becomes 200
+    request:
+      method: POST
+      path: /api/v1/customers
+      headers: {Content-Type: application/json}
+      body: '{"name":"Zoe","email":"zoe@example.com"}'
+    upstream:
+      status: 201
+      headers: {Content-Type: application/json}
+      body: '{"customer":{"id":100,"full_name":"Zoe","email":"zoe@example.com","customer_since":"2026-10-20"}}'
+    expect:
+      upstream_request:
+        method: POST
+        path: /api/v2/customers
+        body: '{"full_name":"Zoe","email":"zoe@example.com"}'
+      response:
+        status: 200
+        body: '{"customer_id":100,"name":"Zoe","email":"zoe@example.com"}'
+
+  - name: delete turns 204 into 200 with a body
+    request:
+      method: DELETE
+      path: /api/v1/customer?id=7
+    upstream:
+      status: 204
+    expect:
+      upstream_request:
+        method: DELETE
+        path: /api/v2/customers/7
+      response:
+        status: 200
+        body: '{"deleted":true}'
+
+  - name: search unwraps the list
+    request:
+      path: /api/v1/customers/search?q=ada
+    upstream:
+      headers: {Content-Type: application/json}
+      body: '{"data":[{"id":7,"full_name":"Ada Lovelace","email":"ada@example.com"}],"next":null}'
+    expect:
+      upstream_request:
+        path: /api/v2/customers?search=ada
+      response:
+        body: '[{"customer_id":7,"name":"Ada Lovelace"}]'
+
+  - name: paths no mapping covers pass through untouched
+    request:
+      path: /api/v2/customers/7
+    upstream:
+      headers: {Content-Type: application/json}
+      body: '{"customer":{"id":7}}'
+    expect:
+      upstream_request:
+        path: /api/v2/customers/7
+      response:
+        body: '{"customer":{"id":7}}'

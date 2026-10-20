@@ -1,0 +1,68 @@
+# aftermarket adapt mappings for the customer-api example.
+#
+# The old client speaks v1. The service only speaks v2, which moved every
+# endpoint, renamed fields, wrapped lists in {"data": [...]}, answers 201,
+# 204 and 422 where v1 answered 200, 200 and 400, and nests errors as
+# {"error": {"code": ..., "message": ...}} where v1 sent {"message": ...}.
+
+version: 1
+
+endpoints:
+  - id: get-customer
+    old: GET /api/v1/customer?id={id}
+    new: GET /api/v2/customers/{id}
+    response:
+      body:
+        customer_id: $.customer.id
+        name: $.customer.full_name
+        email: $.customer.email
+      error:
+        message: $.error.message
+      headers:
+        remove: [X-Api-Version]
+
+  - id: delete-customer
+    old: DELETE /api/v1/customer?id={id}
+    new: DELETE /api/v2/customers/{id}
+    response:
+      status: {204: 200}
+      body:
+        deleted: true
+      error:
+        message: $.error.message
+
+  - id: search-customers
+    old: GET /api/v1/customers/search?q={q}
+    new: GET /api/v2/customers?search={q}
+    response:
+      body:
+        $each: $.data
+        $item:
+          customer_id: $.id
+          name: $.full_name
+
+  - id: list-customers
+    old: GET /api/v1/customers
+    new: GET /api/v2/customers
+    response:
+      body:
+        $each: $.data
+        $item:
+          customer_id: $.id
+          name: $.full_name
+
+  - id: create-customer
+    old: POST /api/v1/customers
+    new: POST /api/v2/customers
+    request:
+      body:
+        full_name: $.name
+        email: $.email
+    response:
+      status: {201: 200, 422: 400}
+      body:
+        customer_id: $.customer.id
+        name: $.customer.full_name
+        email: $.customer.email
+      error:
+        message: $.error.message
