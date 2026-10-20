@@ -90,3 +90,42 @@ func TestRunNeedsUpstream(t *testing.T) {
 		t.Fatalf("run with bad upstream: %d %q", code, errs)
 	}
 }
+
+const adaptDir = "../../examples/customer-api"
+
+func TestAdaptCheckAndTest(t *testing.T) {
+	code, out, errs := runCLI("adapt", "check", "--config", filepath.Join(adaptDir, "adapt.yaml"))
+	if code != 0 || !strings.Contains(out, "5 endpoint(s)") || !strings.Contains(out, "create-customer") || !strings.HasSuffix(out, "ok\n") {
+		t.Fatalf("check: %d %q %q", code, out, errs)
+	}
+	code, out, errs = runCLI("adapt", "test", "--config", filepath.Join(adaptDir, "adapt.yaml"), "--fixture", filepath.Join(adaptDir, "fixture.yaml"))
+	if code != 0 || !strings.Contains(out, "6 case(s), 0 failed") {
+		t.Fatalf("test: %d %q %q", code, out, errs)
+	}
+}
+
+func TestAdaptCheckReportsErrorsAndOverlaps(t *testing.T) {
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.yaml")
+	os.WriteFile(bad, []byte("endpoints:\n  - id: a\n    old: GET /a/{id}\n    new: GET /b/{nope}\n"), 0o600)
+	code, _, errs := runCLI("adapt", "check", "--config", bad)
+	if code != 1 || !strings.Contains(errs, "invalid mapping file") || !strings.Contains(errs, "line 4: new: {nope} is not captured by old") {
+		t.Fatalf("bad config: %d %q", code, errs)
+	}
+	ov := filepath.Join(dir, "ov.yaml")
+	os.WriteFile(ov, []byte("endpoints:\n  - {id: a, old: \"GET /c/{id}\", new: GET /x}\n  - {id: b, old: GET /c/me, new: GET /y}\n"), 0o600)
+	code, out, _ := runCLI("adapt", "check", "--config", ov)
+	if code != 0 || !strings.Contains(out, "note: a (line 2) and b (line 3) can match the same requests; a comes first and wins") {
+		t.Fatalf("overlap: %d %q", code, out)
+	}
+}
+
+func TestAdaptRunNeedsUpstream(t *testing.T) {
+	code, _, errs := runCLI("adapt", "run", "--config", filepath.Join(adaptDir, "adapt.yaml"))
+	if code != 2 || !strings.Contains(errs, "--upstream is required") {
+		t.Fatalf("%d %q", code, errs)
+	}
+	if code, _, _ := runCLI("adapt", "nope"); code != 2 {
+		t.Fatal("unknown adapt command should exit 2")
+	}
+}

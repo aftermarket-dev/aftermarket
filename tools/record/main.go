@@ -23,7 +23,9 @@ import (
 	"sync"
 	"time"
 
+	customerapi "github.com/aftermarket-dev/aftermarket/examples/customer-api"
 	legacycustomer "github.com/aftermarket-dev/aftermarket/examples/legacy-customer"
+	"github.com/aftermarket-dev/aftermarket/internal/adapt"
 	"github.com/aftermarket-dev/aftermarket/internal/patch"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
 	"github.com/aftermarket-dev/aftermarket/internal/version"
@@ -63,7 +65,12 @@ type report struct {
 	AddedP50    float64         `json:"added_p50_us"`
 	AddedP99    float64         `json:"added_p99_us"`
 	PatchedP50  float64         `json:"patched_added_p50_us"`
-	PatchedP99  float64         `json:"patched_added_p99_us"`
+	// adapt over the customer-api example
+	AdaptLookupP50 float64 `json:"adapt_lookup_added_p50_us"`
+	AdaptLookupP99 float64 `json:"adapt_lookup_added_p99_us"`
+	AdaptListP50   float64 `json:"adapt_list_added_p50_us"`
+	AdaptListP99   float64 `json:"adapt_list_added_p99_us"`
+	PatchedP99     float64 `json:"patched_added_p99_us"`
 }
 
 func main() {
@@ -109,6 +116,10 @@ func main() {
 	rep.AddedP99 = round(byName["proxy, no rule matches"].P99Micros - byName["direct to upstream"].P99Micros)
 	rep.PatchedP50 = round(byName["proxy, both example rules applied"].P50Micros - byName["direct to upstream"].P50Micros)
 	rep.PatchedP99 = round(byName["proxy, both example rules applied"].P99Micros - byName["direct to upstream"].P99Micros)
+	rep.AdaptLookupP50 = round(byName["adapt: v1 lookup rebuilt from v2"].P50Micros - byName["adapt: direct to v2, one customer"].P50Micros)
+	rep.AdaptLookupP99 = round(byName["adapt: v1 lookup rebuilt from v2"].P99Micros - byName["adapt: direct to v2, one customer"].P99Micros)
+	rep.AdaptListP50 = round(byName["adapt: v1 list rebuilt from v2"].P50Micros - byName["adapt: direct to v2, list"].P50Micros)
+	rep.AdaptListP99 = round(byName["adapt: v1 list rebuilt from v2"].P99Micros - byName["adapt: direct to v2, list"].P99Micros)
 
 	b, _ := json.MarshalIndent(rep, "", "  ")
 	if err := os.WriteFile(filepath.Join(outDir, "results.json"), append(b, '\n'), 0o644); err != nil {
@@ -207,12 +218,31 @@ func measure() ([]latencyResult, error) {
 	pxURL, stopPx := serve(px)
 	defer stopPx()
 
+	// adapt in front of the customer-api v2 service.
+	v2URL, stopV2 := serve(customerapi.NewV2())
+	defer stopV2()
+	acfg, err := adapt.LoadFile("examples/customer-api/adapt.yaml")
+	if err != nil {
+		return nil, err
+	}
+	v2u, _ := url.Parse(v2URL)
+	apx, err := adapt.New(adapt.Options{Upstream: v2u, Config: acfg})
+	if err != nil {
+		return nil, err
+	}
+	apxURL, stopApx := serve(apx)
+	defer stopApx()
+
 	cases := []struct {
 		name, url, want string
 	}{
 		{"direct to upstream", svcURL + "/api/v2/customers/7", `"full_name":"Ada Lovelace"`},
 		{"proxy, no rule matches", pxURL + "/api/v2/customers/7", `"full_name":"Ada Lovelace"`},
 		{"proxy, both example rules applied", pxURL + "/api/v1/customer?id=7", `"name":"Ada Lovelace"`},
+		{"adapt: direct to v2, one customer", v2URL + "/api/v2/customers/7", `"full_name":"Ada Lovelace"`},
+		{"adapt: v1 lookup rebuilt from v2", apxURL + "/api/v1/customer?id=7", `{"customer_id":7,"name":"Ada Lovelace"`},
+		{"adapt: direct to v2, list", v2URL + "/api/v2/customers", `"data":[`},
+		{"adapt: v1 list rebuilt from v2", apxURL + "/api/v1/customers", `[{"customer_id":7,`},
 	}
 	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 64, DisableCompression: true}}
 	get := func(u, want string) (time.Duration, error) {
@@ -313,12 +343,14 @@ func summary(r report) string {
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", t.Package, t.Test, t.Result)
 	}
-	b.WriteString("\n## Latency\n\nThe legacy-customer example over loopback, 20,000 sequential requests after a 2,000 request warm-up, then 16 clients for 2 seconds.\n\n")
+	b.WriteString("\n## Latency\n\nOver loopback, 20,000 sequential requests per row after a 2,000 request warm-up, then 16 clients for 2 seconds. The first three rows are patch with the legacy-customer example; the adapt rows are the customer-api example, where the list has three customers.\n\n")
 	b.WriteString("| Path | p50 | p99 | Requests/s (16 clients) |\n| --- | --- | --- | --- |\n")
 	for _, l := range r.Latency {
 		fmt.Fprintf(&b, "| %s | %.1f µs | %.1f µs | %.0f |\n", l.Name, l.P50Micros, l.P99Micros, l.ReqPerSec)
 	}
 	fmt.Fprintf(&b, "\nAdded by the proxy when no rule matches: %.1f µs at p50, %.1f µs at p99.\n", r.AddedP50, r.AddedP99)
 	fmt.Fprintf(&b, "Added by the proxy with both example rules applied: %.1f µs at p50, %.1f µs at p99.\n", r.PatchedP50, r.PatchedP99)
+	fmt.Fprintf(&b, "Added by adapt rebuilding a v1 lookup from v2: %.1f µs at p50, %.1f µs at p99.\n", r.AdaptLookupP50, r.AdaptLookupP99)
+	fmt.Fprintf(&b, "Added by adapt rebuilding a v1 list from v2: %.1f µs at p50, %.1f µs at p99.\n", r.AdaptListP50, r.AdaptListP99)
 	return b.String()
 }

@@ -42,7 +42,7 @@ type ctxKey struct{}
 type plan struct {
 	id        uint64
 	method    string // as the client sent it
-	path      string // as the client sent it, decoded
+	path      string // the old path pattern, such as /api/v1/customers/{id}
 	queryKeys []string
 	ep        *Endpoint
 	params    map[string]string
@@ -148,7 +148,8 @@ func (p *Proxy) plan(r *http.Request) *plan {
 	if ep == nil {
 		return nil
 	}
-	pl := &plan{id: p.reqID.Add(1), method: r.Method, path: r.URL.Path, ep: ep, params: params}
+	// The audit log shows the endpoint's pattern, never parameter values.
+	pl := &plan{id: p.reqID.Add(1), method: r.Method, path: ep.Old.PathPattern(), ep: ep, params: params}
 	for k := range query {
 		pl.queryKeys = append(pl.queryKeys, k)
 	}
@@ -435,7 +436,10 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 			}
 		}
 		if reason != "" {
-			notApplied = append(notApplied, "rebuild "+which+" ("+reason+")")
+			// All or nothing: a response that can't be rebuilt goes back
+			// exactly as the upstream sent it, status and headers included.
+			p.event(pl, "response", audit.Skipped, orig, nil, nil, reason)
+			return nil
 		}
 	}
 
@@ -449,16 +453,13 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 	}
 
 	kind := p.changedKind()
-	switch {
-	case len(applied) == 0 && reason != "":
-		kind = audit.Skipped
-	case len(applied) == 0:
+	if len(applied) == 0 {
+		if len(notApplied) == 0 && t == nil && len(m.Status) == 0 && m.Headers.empty() {
+			return nil // nothing configured for responses; nothing to report
+		}
 		kind = audit.Unchanged
 	}
-	if kind == audit.Unchanged && len(notApplied) == 0 && t == nil && len(m.Status) == 0 && m.Headers.empty() {
-		return nil // nothing configured for responses; nothing to report
-	}
-	p.event(pl, "response", kind, orig, applied, notApplied, reason)
+	p.event(pl, "response", kind, orig, applied, notApplied, "")
 	if p.opts.DryRun {
 		return nil
 	}

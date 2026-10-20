@@ -541,6 +541,24 @@ func parseOld(s string) (OldPattern, error) {
 	return op, nil
 }
 
+// PathPattern returns the old path with parameters shown as {name}, for
+// the audit log, which never holds parameter values.
+func (op OldPattern) PathPattern() string {
+	var b strings.Builder
+	for _, s := range op.Segments {
+		b.WriteString("/")
+		if s.param != "" {
+			b.WriteString("{" + s.param + "}")
+		} else {
+			b.WriteString(url.PathEscape(s.literal))
+		}
+	}
+	if b.Len() == 0 {
+		return "/"
+	}
+	return b.String()
+}
+
 func (op *OldPattern) addParam(name string) error {
 	if !nameRe.MatchString(name) {
 		return fmt.Errorf("parameter name %q must be letters, digits and _", name)
