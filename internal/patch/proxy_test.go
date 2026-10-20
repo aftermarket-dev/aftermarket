@@ -109,7 +109,7 @@ func do(t *testing.T, method, u string, h http.Header, body []byte) captured {
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("read body: %v", err)
+		t.Fatalf("%s %s: read body: %v", method, u, err)
 	}
 	return captured{status: resp.StatusCode, header: resp.Header, body: b}
 }

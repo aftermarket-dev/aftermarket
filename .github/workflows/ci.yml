@@ -13,7 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Pinned: ubuntu-latest moved to Ubuntu 26 on Oct 19 2026, where a test's
+        # direct call to its own test server failed with an unexpected EOF.
+        os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
