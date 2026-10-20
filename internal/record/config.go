@@ -25,6 +25,9 @@ const Redacted = "REDACTED"
 // CredentialHeaders are always redacted.
 var CredentialHeaders = []string{"Authorization", "Proxy-Authorization", "Cookie", "Set-Cookie", "X-Api-Key"}
 
+// CredentialQuery are query keys that are always redacted.
+var CredentialQuery = []string{"access_token", "api_key", "apikey", "client_secret", "password", "sig", "signature", "token"}
+
 // Config is a loaded record config. The zero config from Default records
 // everything and redacts credentials only.
 type Config struct {
@@ -47,6 +50,9 @@ func Default() *Config {
 	}
 	for _, h := range CredentialHeaders {
 		c.RedactHeaders[h] = true
+	}
+	for _, q := range CredentialQuery {
+		c.RedactQuery[q] = true
 	}
 	return c
 }

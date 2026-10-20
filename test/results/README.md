@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.2.0
-- Recorded: 2026-10-20T07:34:33Z
+- Version: 0.3.0
+- Recorded: 2026-10-20T08:08:48Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-234 of 234 tests passed (race detector on).
+272 of 272 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -17,6 +17,10 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | cmd/aftermarket | TestAdaptRunNeedsUpstream | pass |
 | cmd/aftermarket | TestCheckExample | pass |
 | cmd/aftermarket | TestCheckReportsErrorsAndOverlaps | pass |
+| cmd/aftermarket | TestRecordCheck | pass |
+| cmd/aftermarket | TestRecordNeverOverwrites | pass |
+| cmd/aftermarket | TestRecordOnBusyPortLeavesNoFile | pass |
+| cmd/aftermarket | TestReplayCLI | pass |
 | cmd/aftermarket | TestRunNeedsUpstream | pass |
 | cmd/aftermarket | TestTestExample | pass |
 | cmd/aftermarket | TestTestFailingFixture | pass |
@@ -26,6 +30,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | examples/customer-api | TestEveryEndpointIsNeeded | pass |
 | examples/customer-api | TestFixtureFilePasses | pass |
 | examples/customer-api | TestOldClientPassesThroughAdapt | pass |
+| examples/customer-api | TestRecordedSuiteReplaysTheSameThroughAdapt | pass |
 | examples/customer-api | TestV2BreaksTheOldClient | pass |
 | examples/legacy-customer | TestFixtureFilePasses | pass |
 | examples/legacy-customer | TestOldClientNeedsTheRules | pass |
@@ -119,6 +124,39 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/patch | TestUpstreamBasePath | pass |
 | internal/patch | TestUpstreamDownGives502 | pass |
 | internal/patch | TestUpstreamErrorReasonHasNoValues | pass |
+| internal/record | TestAuditIDsAndMaxCases | pass |
+| internal/record | TestConcurrentRecording | pass |
+| internal/record | TestConfigErrorsAreAllReportedInLineOrder | pass |
+| internal/record | TestGzipBodiesAreStoredDecoded | pass |
+| internal/record | TestHeadersThatArentTextAreSkipped | pass |
+| internal/record | TestHealthPath | pass |
+| internal/record | TestJSONIsRedactedWhateverTheContentType | pass |
+| internal/record | TestQueryRedactionCoversEverySeparator | pass |
+| internal/record | TestQuoteRoundTrips | pass |
+| internal/record | TestRecordingChangesZeroBytes | pass |
+| internal/record | TestRecordingsRunWithPatchAndAdaptTest | pass |
+| internal/record | TestRedaction | pass |
+| internal/record | TestRequestWithoutPathIsStoredAsSlash | pass |
+| internal/record | TestResponsesStream | pass |
+| internal/record | TestUnstorableExchangesPassAndAreSkipped | pass |
+| internal/record | TestUpgradedConnectionsPassThrough | pass |
+| internal/record | TestUpstreamDownAndSlow | pass |
+| internal/record | TestUpstreamURLSecretsStayOut | pass |
+| internal/record | TestWhenPicksTrafficAndMaxCasesStops | pass |
+| internal/replay | TestBadOptions | pass |
+| internal/replay | TestDifferencesAreListedByPath | pass |
+| internal/replay | TestDiffsAreCapped | pass |
+| internal/replay | TestGzipAnswersAreComparedDecoded | pass |
+| internal/replay | TestJSONIsComparedByMeaning | pass |
+| internal/replay | TestNothingComparedIsNotOK | pass |
+| internal/replay | TestNumbersAreComparedExactly | pass |
+| internal/replay | TestOneServiceIsComparedWithTheRecording | pass |
+| internal/replay | TestOtherBodiesAreComparedByteForByte | pass |
+| internal/replay | TestReportHidesURLSecrets | pass |
+| internal/replay | TestReports | pass |
+| internal/replay | TestRequestsAreSentAsRecorded | pass |
+| internal/replay | TestUnreachableServiceIsAnError | pass |
+| internal/replay | TestWritesAreSentOnlyWhenAsked | pass |
 | internal/rules | TestGlobMatch | pass |
 | internal/rules | TestLoadErrors | pass |
 | internal/rules | TestLoadGood | pass |
@@ -134,19 +172,21 @@ Written by `go run ./tools/record`. Do not edit by hand.
 
 ## Latency
 
-Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up, then 16 clients for 2 seconds. The first three rows are patch with the legacy-customer example; the adapt rows are the customer-api example, where the list has three customers.
+Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up, then 16 clients for 2 seconds. The first three rows are patch with the legacy-customer example; the adapt rows are the customer-api example, where the list has three customers. The record row saves every exchange to a fixture file on disk.
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 24.3 µs | 145.4 µs | 48174 |
-| proxy, no rule matches | 65.2 µs | 667.9 µs | 11946 |
-| proxy, both example rules applied | 102.1 µs | 1138.4 µs | 10113 |
-| adapt: direct to v2, one customer | 27.1 µs | 191.0 µs | 39613 |
-| adapt: v1 lookup rebuilt from v2 | 94.5 µs | 1317.8 µs | 10608 |
-| adapt: direct to v2, list | 27.4 µs | 191.1 µs | 41215 |
-| adapt: v1 list rebuilt from v2 | 109.7 µs | 1646.5 µs | 8692 |
+| direct to upstream | 34.5 µs | 163.2 µs | 42443 |
+| proxy, no rule matches | 67.3 µs | 719.0 µs | 11053 |
+| proxy, both example rules applied | 110.1 µs | 1349.5 µs | 9797 |
+| adapt: direct to v2, one customer | 24.8 µs | 208.3 µs | 40944 |
+| adapt: v1 lookup rebuilt from v2 | 106.9 µs | 1476.5 µs | 10277 |
+| adapt: direct to v2, list | 26.7 µs | 200.0 µs | 40044 |
+| adapt: v1 list rebuilt from v2 | 110.3 µs | 1580.7 µs | 8613 |
+| record: v2 lookup saved to a fixture | 105.7 µs | 1179.1 µs | 9950 |
 
-Added by the proxy when no rule matches: 40.9 µs at p50, 522.5 µs at p99.
-Added by the proxy with both example rules applied: 77.8 µs at p50, 993.0 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 67.4 µs at p50, 1126.8 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 82.3 µs at p50, 1455.4 µs at p99.
+Added by the proxy when no rule matches: 32.8 µs at p50, 555.8 µs at p99.
+Added by the proxy with both example rules applied: 75.6 µs at p50, 1186.3 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 82.1 µs at p50, 1268.2 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 83.6 µs at p50, 1380.7 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 80.9 µs at p50, 970.8 µs at p99.

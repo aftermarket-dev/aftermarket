@@ -66,8 +66,9 @@ type Report struct {
 	Compared []string     `json:"headers_compared"`
 }
 
-// OK reports whether every case that ran gave the same answer on both sides.
-func (r *Report) OK() bool { return r.Diff == 0 && r.Errors == 0 }
+// OK reports whether every case that ran gave the same answer on both
+// sides. A replay that compared nothing is not OK: it proves nothing.
+func (r *Report) OK() bool { return r.Diff == 0 && r.Errors == 0 && r.Same > 0 }
 
 type answer struct {
 	status int
@@ -112,9 +113,9 @@ func Run(ctx context.Context, f *fixture.Fixture, o Options) (*Report, error) {
 		Timeout:       o.Timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	rep := &Report{A: o.A.Redacted(), B: "recorded responses", Compared: headers}
+	rep := &Report{A: httpx.SafeURL(o.A), B: "recorded responses", Compared: headers}
 	if o.B != nil {
-		rep.B = o.B.Redacted()
+		rep.B = httpx.SafeURL(o.B)
 	}
 	for _, p := range o.Ignore {
 		rep.Ignored = append(rep.Ignored, strings.Join(p, "."))
@@ -280,6 +281,9 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 		fmt.Fprintf(&b, "- Ignored: %s\n", strings.Join(r.Ignored, ", "))
 	}
 	fmt.Fprintf(&b, "\n%s\n", r.Summary())
+	if r.Same+r.Diff+r.Errors == 0 {
+		fmt.Fprintf(&b, "\nNothing was compared, so the replay proves nothing. Use --include-writes to send the skipped cases.\n")
+	}
 	if r.Diff+r.Errors > 0 {
 		fmt.Fprintf(&b, "\n## Differences\n")
 		for _, c := range r.Cases {

@@ -371,3 +371,12 @@ func WriteRequestTimeout(w http.ResponseWriter) {
 	w.WriteHeader(http.StatusRequestTimeout)
 	_, _ = w.Write([]byte("aftermarket: request body timed out\n"))
 }
+
+// SafeURL writes u for logs, reports and file headers: scheme, host and
+// path only, so a password or a query string key never shows.
+func SafeURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}).String()
+}

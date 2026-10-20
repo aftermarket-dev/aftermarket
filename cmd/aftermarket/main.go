@@ -326,6 +326,11 @@ func serve(listen string, h http.Handler, stdout, stderr io.Writer, started func
 		fmt.Fprintf(stderr, "aftermarket: %v\n", err)
 		return 1
 	}
+	return serveOn(ln, h, stdout, stderr, started, stopped)
+}
+
+// serveOn is serve on a listener that is already open.
+func serveOn(ln net.Listener, h http.Handler, stdout, stderr io.Writer, started func(addr string) string, stopped func() string) int {
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	fmt.Fprintln(stdout, started(ln.Addr().String()))
 

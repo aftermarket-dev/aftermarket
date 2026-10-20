@@ -175,13 +175,55 @@ func (d *differ) walk(path []string, a, b any) {
 	}
 }
 
+// sameNumber compares two JSON numbers exactly. Numbers too long to compare
+// as fractions are compared as written.
 func sameNumber(a, b json.Number) bool {
 	if a == b {
 		return true
 	}
-	x, _, err1 := big.ParseFloat(string(a), 10, 256, big.ToNearestEven)
-	y, _, err2 := big.ParseFloat(string(b), 10, 256, big.ToNearestEven)
-	return err1 == nil && err2 == nil && x.Cmp(y) == 0
+	x, ok1 := exact(string(a))
+	y, ok2 := exact(string(b))
+	if !ok1 || !ok2 {
+		return false
+	}
+	return x.Cmp(y) == 0
+}
+
+// exact turns a JSON number into a fraction, refusing ones with more than
+// 400 digits or an exponent beyond 400, which would cost too much to build.
+func exact(s string) (*big.Rat, bool) {
+	mant, exp := s, 0
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		e, err := strconv.Atoi(s[i+1:])
+		if err != nil || e > 400 || e < -400 {
+			return nil, false
+		}
+		mant, exp = s[:i], e
+	}
+	if len(mant) > 400 {
+		return nil, false
+	}
+	r, ok := new(big.Rat).SetString(mant)
+	if !ok {
+		return nil, false
+	}
+	if exp != 0 {
+		p := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(abs(exp))), nil)
+		f := new(big.Rat).SetInt(p)
+		if exp > 0 {
+			r.Mul(r, f)
+		} else {
+			r.Quo(r, f)
+		}
+	}
+	return r, true
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func pathString(p []string) string {

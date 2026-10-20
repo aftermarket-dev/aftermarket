@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/fixture"
+	"github.com/aftermarket-dev/aftermarket/internal/httpx"
 	"github.com/aftermarket-dev/aftermarket/internal/patch"
 	"github.com/aftermarket-dev/aftermarket/internal/record"
 	"github.com/aftermarket-dev/aftermarket/internal/replay"
@@ -126,6 +128,17 @@ func runRecord(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "aftermarket: bad --upstream: %v\n", err)
 		return 2
 	}
+	if _, err := os.Stat(*out); err == nil {
+		fmt.Fprintf(stderr, "aftermarket: %s already exists; record never overwrites a fixture, so choose another --out\n", *out)
+		return 1
+	}
+	// Listen first, so a busy port doesn't leave an empty fixture behind.
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		fmt.Fprintf(stderr, "aftermarket: %v\n", err)
+		return 1
+	}
+	defer ln.Close()
 	f, err := os.OpenFile(*out, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -148,8 +161,8 @@ func runRecord(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "aftermarket: %v\n", err)
 		return 2
 	}
-	return serve(*listen, rec, stdout, stderr, func(addr string) string {
-		return fmt.Sprintf("aftermarket record %s: http://%s -> %s, writing %s", version.Version, addr, u.Redacted(), *out)
+	return serveOn(ln, rec, stdout, stderr, func(addr string) string {
+		return fmt.Sprintf("aftermarket record %s: http://%s -> %s, writing %s", version.Version, addr, httpx.SafeURL(u), *out)
 	}, func() string {
 		return fmt.Sprintf("aftermarket record: stopped, %d case(s) written to %s", rec.Cases(), *out)
 	})

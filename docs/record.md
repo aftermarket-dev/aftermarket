@@ -52,12 +52,14 @@ These exchanges pass through untouched and are logged as `skipped`, with the rea
 - a request or response body over `max_body`, before or after decompression
 - a body that isn't text (not valid UTF-8)
 - compression other than gzip, or a gzip body that can't be decoded
-- a JSON body that can't be read while JSON fields are listed for redaction, since record can't check it for those values
+- a body labelled JSON that can't be read while JSON fields are listed for redaction, since record can't check it for those values
+- a header value or a path that isn't valid UTF-8, which a fixture can't hold exactly
 - a body that was cut off, or a request body the upstream didn't read to the end
 - an upstream that failed (the client gets the usual `502` or `504`)
+- an upgraded connection, such as a WebSocket (`101 Switching Protocols`); the connection itself works as usual
 - anything after `max_cases` cases
 
-Traffic that doesn't match `when:` passes through without a log line.
+Traffic that doesn't match `when:` passes through without a log line. The fixture file starts with a comment naming the upstream by scheme, host and path only, so a password or query string in `--upstream` never reaches it.
 
 ### Config file
 
@@ -90,11 +92,12 @@ max_cases: 1000            # optional; no limit by default
 Redaction changes only what goes into the fixture file. The client and the upstream always see the real values.
 
 - **Credential headers are always redacted:** `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie` and `X-Api-Key`, in requests and in answers.
+- **Credential query keys are always redacted:** `access_token`, `api_key`, `apikey`, `client_secret`, `password`, `sig`, `signature` and `token`.
 - `redact.headers` adds more header names.
-- `redact.query` names query keys. Their values become `REDACTED`, and the rest of the query string keeps its bytes: `?api_key=s3cret&page=2` is stored as `?api_key=REDACTED&page=2`.
-- `redact.json` names JSON fields by dot path, in request and response bodies with a JSON `Content-Type`. `*` stands for any key or list element, so `data.*.email` covers every email in a `data` list. A number selects one list element. A redacted value becomes the string `"REDACTED"`, whatever it was. A body where nothing matched is stored exactly as sent.
+- `redact.query` adds more query keys. Their values become `REDACTED`, and the rest of the query string keeps its bytes: `?api_key=s3cret&page=2` is stored as `?api_key=REDACTED&page=2`. Both `&` and `;` count as separators, and encoded keys such as `api%5Fkey` are matched too. The same keys are redacted in the query string of a `Location` header.
+- `redact.json` names JSON fields by dot path. Every request and response body that is valid JSON is checked, whatever its `Content-Type` says. `*` stands for any key or list element, so `data.*.email` covers every email in a `data` list. A number selects one list element. A path starts at the top of the body, so `password` doesn't reach into a list; write `*.password` for that. A redacted value becomes the string `"REDACTED"`, whatever it was. A body where nothing matched is stored exactly as sent.
 
-Values in a URL path, such as `/users/ada@example.com`, and in bodies that aren't JSON are not redacted. Keep those out with `when:`.
+Values in a URL path, such as `/users/ada@example.com`, and in bodies that aren't JSON, such as a form post, are not redacted. Keep those out with `when:`.
 
 The audit log never contains values, as with the other tools.
 
@@ -118,15 +121,15 @@ replay sends each case's request to `--a` and `--b` in turn, in file order, and 
 
 - **Status codes** must be the same.
 - **Headers:** only `Content-Type` by default. `--header` replaces that list and can be given more than once. Against a recording, a header that wasn't recorded isn't compared.
-- **JSON bodies** (both sides valid JSON) are compared by meaning. Key order and spacing don't count, and neither does the way a number is written: `1`, `1.0` and `1e0` are the same. Differences are listed by dot path, such as `customer.email: "a@x" vs "b@x"`, `name: only in A`, or `data: 3 items vs 2 items`. At most 20 are listed per case.
-- `--ignore` leaves a dot path out of the comparison, with `*` for any key or element: `--ignore data.*.updated_at`. It can be given more than once.
+- **JSON bodies** (both sides valid JSON) are compared by meaning. Key order and spacing don't count, and neither does the way a number is written: `1`, `1.0` and `1e0` are the same. Numbers are compared exactly, however many digits they have. Differences are listed by dot path, such as `customer.email: "a@x" vs "b@x"`, `name: only in A`, or `data: 3 items vs 2 items`. At most 20 are listed per case.
+- `--ignore` leaves a dot path out of the comparison, with `*` for any key or element: `--ignore data.*.updated_at`. It can be given more than once. When you compare one service with a recording, redacted fields show up as differences (`"REDACTED" vs "the real value"`), so ignore those paths too.
 - **Other bodies** are compared byte for byte, after gzip is undone. The report gives both lengths and where they first differ.
 
 ### Report
 
 The Markdown report goes to stdout, or to `--report FILE` with only the summary line on stdout. `--json FILE` writes the same report as JSON. Every case has an outcome: `same`, `different`, `skipped` or `error` (a side couldn't be reached or answered too late).
 
-replay exits 0 when every case it sent got the same answer from both sides, 1 when any differed or failed, and 2 for a usage error. That makes it fit in CI.
+replay exits 0 when every case it sent got the same answer from both sides, 1 when any differed or failed, and 2 for a usage error. A replay that compared nothing, because every case was skipped, also exits 1, since it proves nothing. A fixture file that can't be read exits 1, as with `patch test`. The report names services by scheme, host and path only. That makes it fit in CI.
 
 ## A typical run
 

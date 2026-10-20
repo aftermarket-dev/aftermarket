@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -214,5 +215,22 @@ func TestReplayCLI(t *testing.T) {
 	}
 	if code, _, _ := runCLI("replay", "--fixture", filepath.Join(dir, "none.yaml"), "--a", a.URL); code != 1 {
 		t.Error("a missing fixture should exit 1")
+	}
+}
+
+// Review finding: a busy port left an empty fixture behind, so a retry
+// failed with "already exists".
+func TestRecordOnBusyPortLeavesNoFile(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	out := filepath.Join(t.TempDir(), "f.yaml")
+	if code, _, errs := runCLI("record", "--upstream", "http://127.0.0.1:1", "--out", out, "--listen", ln.Addr().String()); code != 1 {
+		t.Fatalf("%d %q", code, errs)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("an empty fixture was left behind")
 	}
 }

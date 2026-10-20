@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aftermarket-dev/aftermarket/internal/audit"
+	"github.com/aftermarket-dev/aftermarket/internal/fixture"
 	"github.com/aftermarket-dev/aftermarket/internal/httpx"
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
 )
@@ -68,7 +69,7 @@ func New(opts Options) (*Recorder, error) {
 	if opts.Out == nil {
 		return nil, errors.New("no fixture file to write to")
 	}
-	cw, err := newCaseWriter(opts.Out, opts.Upstream.Redacted(), opts.Config.MaxCases)
+	cw, err := newCaseWriter(opts.Out, httpx.SafeURL(opts.Upstream), opts.Config.MaxCases)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +108,9 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		uri:    req.URL.EscapedPath(),
 		header: req.Header.Clone(),
 	}
+	if ex.uri == "" {
+		ex.uri = "/" // an absolute-form request with no path goes upstream as /
+	}
 	if req.URL.RawQuery != "" {
 		ex.uri += "?" + req.URL.RawQuery
 	}
@@ -119,7 +123,9 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w2 := r.opts.Config.When
 	candidate := !(w2.PathGlob != "" && httpx.UnsafePath(req.URL)) &&
 		w2.MatchRequest(req.Method, req.URL.Path, query, req.Header)
-	if candidate && !r.out.full() {
+	if candidate && r.out.full() {
+		r.skip(ex, 0, "max_cases reached")
+	} else if candidate {
 		ex.record = true
 		if req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0 {
 			ex.reqTap = &tap{rc: req.Body, max: r.opts.Config.MaxBody}
@@ -153,6 +159,12 @@ func (r *Recorder) modifyResponse(resp *http.Response) error {
 	if ex == nil || !ex.record || !r.opts.Config.When.MatchResponse(resp.StatusCode, resp.Header.Get("Content-Type")) {
 		return nil
 	}
+	if resp.StatusCode < 200 {
+		// An upgraded connection (101) carries no HTTP body to record, and the
+		// proxy needs its raw connection untouched.
+		r.skip(ex, resp.StatusCode, "the connection was upgraded, which can't be recorded")
+		return nil
+	}
 	status, header := resp.StatusCode, resp.Header.Clone()
 	emptyExpected := resp.ContentLength == 0 || ex.method == http.MethodHead ||
 		resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified
@@ -172,16 +184,19 @@ func (r *Recorder) errorHandler(w http.ResponseWriter, req *http.Request, err er
 		return
 	}
 	status, reason := httpx.UpstreamReason(err)
-	r.opts.Audit.Write(audit.Event{
-		Event:   audit.UpstreamError,
-		Request: r.reqID.Load(),
-		Method:  req.Method,
-		Path:    req.URL.Path,
-		Status:  status,
-		Reason:  reason,
-	})
 	if ex, _ := req.Context().Value(ctxKey{}).(*exchange); ex != nil {
-		r.skip(ex, status, "the upstream failed")
+		r.opts.Audit.Write(audit.Event{
+			Event:     audit.UpstreamError,
+			Request:   ex.id,
+			Method:    ex.method,
+			Path:      ex.path,
+			QueryKeys: ex.queryKeys,
+			Status:    status,
+			Reason:    reason,
+		})
+		if ex.record {
+			r.skip(ex, status, "the upstream failed, so there is no answer to record")
+		}
 	}
 	httpx.WriteUpstreamError(w, status)
 }
@@ -238,8 +253,17 @@ func (r *Recorder) finish(ex *exchange, status int, respHdr http.Header, resp *t
 		return
 	}
 
+	reqCT, respCT := ex.header.Get("Content-Type"), respHdr.Get("Content-Type")
 	reqHdr := cleanHeaders(ex.header, "Host", "Accept-Encoding")
 	respHdr = cleanHeaders(respHdr, "Date")
+	if !textHeaders(reqHdr) || !textHeaders(respHdr) || !utf8.ValidString(ex.uri) {
+		r.skip(ex, status, "a header or the path is not valid UTF-8, so it can't be stored exactly")
+		return
+	}
+	if fixture.CheckPath(ex.uri) != nil {
+		r.skip(ex, status, "the request path can't be stored in a fixture")
+		return
+	}
 	redactHeaders(reqHdr, cfg.RedactHeaders)
 	redactHeaders(respHdr, cfg.RedactHeaders)
 	uri := ex.uri
@@ -248,11 +272,18 @@ func (r *Recorder) finish(ex *exchange, status int, respHdr http.Header, resp *t
 			uri = p + "?" + nq
 		}
 	}
-	if reqBody, why = redactBody(reqBody, reqHdr.Get("Content-Type"), cfg.RedactJSON); why != "" {
+	if loc := respHdr.Get("Location"); loc != "" {
+		if p, q, ok := strings.Cut(loc, "?"); ok {
+			if nq, changed := redactQuery(q, cfg.RedactQuery); changed {
+				respHdr.Set("Location", p+"?"+nq)
+			}
+		}
+	}
+	if reqBody, why = redactBody(reqBody, reqCT, cfg.RedactJSON); why != "" {
 		r.skip(ex, status, "request "+why)
 		return
 	}
-	if respBody, why = redactBody(respBody, respHdr.Get("Content-Type"), cfg.RedactJSON); why != "" {
+	if respBody, why = redactBody(respBody, respCT, cfg.RedactJSON); why != "" {
 		r.skip(ex, status, "response "+why)
 		return
 	}
@@ -270,6 +301,22 @@ func (r *Recorder) finish(ex *exchange, status int, respHdr http.Header, resp *t
 		QueryKeys: ex.queryKeys,
 		Status:    status,
 	})
+}
+
+// textHeaders reports whether every header value is valid UTF-8, which a
+// fixture can store exactly.
+func textHeaders(h http.Header) bool {
+	for k, vs := range h {
+		if !utf8.ValidString(k) {
+			return false
+		}
+		for _, v := range vs {
+			if !utf8.ValidString(v) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // cleanHeaders drops headers a fixture must not carry: connection handling,
@@ -317,15 +364,19 @@ func decode(data []byte, encoding string, max int64) (string, string) {
 	return string(data), ""
 }
 
-// redactBody replaces listed JSON values. A JSON body that can't be read
-// can't be checked, so it isn't stored.
+// redactBody replaces listed JSON values in any body that is JSON, whatever
+// its Content-Type says. A body labelled JSON that can't be read can't be
+// checked, so it isn't stored.
 func redactBody(body, contentType string, paths [][]string) (string, string) {
-	if len(paths) == 0 || body == "" || !httpx.IsJSON(contentType) {
+	if len(paths) == 0 || strings.TrimSpace(body) == "" {
 		return body, ""
 	}
 	doc, err := ojson.Decode([]byte(body))
 	if err != nil {
-		return "", "JSON body could not be read to redact it"
+		if httpx.IsJSON(contentType) {
+			return "", "JSON body could not be read to redact it"
+		}
+		return body, "" // not JSON, so no JSON field to redact
 	}
 	doc, n := redactJSON(doc, paths)
 	if n == 0 {

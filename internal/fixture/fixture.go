@@ -133,7 +133,7 @@ func parseCase(n *yamlite.Node, i int) (Case, error) {
 	if c.Request.Path == "" {
 		return c, fmt.Errorf("line %d: case %q needs request.path", n.Line, c.Name)
 	}
-	if u, err := url.ParseRequestURI(c.Request.Path); err != nil || !strings.HasPrefix(c.Request.Path, "/") || strings.ContainsAny(c.Request.Path, " \t\r\n") || u.Host != "" {
+	if CheckPath(c.Request.Path) != nil {
 		return c, fmt.Errorf("line %d: case %q: request.path %q must be a path such as /api/x?id=1, with spaces written as %%20", n.Line, c.Name, c.Request.Path)
 	}
 	if c.Request.Method != "" && !validMethod(c.Request.Method) {
@@ -197,6 +197,15 @@ func parseMessage(n *yamlite.Node, isRequest bool) (Message, error) {
 		}
 	}
 	return m, nil
+}
+
+// CheckPath reports whether p is a request path a fixture can hold: it
+// starts with /, has no host and no unescaped whitespace.
+func CheckPath(p string) error {
+	if u, err := url.ParseRequestURI(p); err != nil || !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t\r\n") || u.Host != "" {
+		return fmt.Errorf("%q is not a request path such as /api/x?id=1", p)
+	}
+	return nil
 }
 
 func validMethod(m string) bool {

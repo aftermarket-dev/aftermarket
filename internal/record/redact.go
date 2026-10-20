@@ -23,25 +23,34 @@ func redactHeaders(h http.Header, names map[string]bool) []string {
 }
 
 // redactQuery replaces the values of listed query keys and keeps every other
-// byte of the query string as it was.
+// byte of the query string as it was. Both & and ; count as separators,
+// since some servers read either.
 func redactQuery(raw string, keys map[string]bool) (string, bool) {
 	if raw == "" || len(keys) == 0 {
 		return raw, false
 	}
-	parts := strings.Split(raw, "&")
+	var b strings.Builder
 	changed := false
-	for i, part := range parts {
+	for raw != "" {
+		i := strings.IndexAny(raw, "&;")
+		part, sep := raw, ""
+		if i >= 0 {
+			part, sep, raw = raw[:i], raw[i:i+1], raw[i+1:]
+		} else {
+			raw = ""
+		}
 		k, _, _ := strings.Cut(part, "=")
 		name, err := url.QueryUnescape(k)
 		if err != nil {
 			name = k
 		}
 		if keys[name] {
-			parts[i] = k + "=" + Redacted
+			part = k + "=" + Redacted
 			changed = true
 		}
+		b.WriteString(part + sep)
 	}
-	return strings.Join(parts, "&"), changed
+	return b.String(), changed
 }
 
 // redactJSON replaces every value at the given paths. It returns how many

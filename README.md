@@ -114,7 +114,7 @@ Put record in front of the old service and run the old client's tests through it
 aftermarket record --upstream http://127.0.0.1:9001 --out recorded.yaml --listen 127.0.0.1:8090
 ```
 
-Every request and answer passes through unchanged, and each finished exchange is written to `recorded.yaml` as a fixture case. `Authorization`, cookies and other credentials are saved as `REDACTED`; a config file can add more headers, query keys and JSON fields. Then send the recording to the old service and the new one:
+Every request and answer passes through unchanged, and each finished exchange is written to `recorded.yaml` as a fixture case. `Authorization`, cookies and credential query keys such as `api_key` are saved as `REDACTED`; a config file can add more headers, query keys and JSON fields. Then send the recording to the old service and the new one:
 
 ```sh
 aftermarket replay --fixture recorded.yaml --a http://127.0.0.1:9001 --b http://127.0.0.1:8080
@@ -218,7 +218,7 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **A dead upstream gets a clean `502` and a slow one a `504`** after `upstream_timeout` (30 seconds by default). That includes a body the proxy is waiting for. A client that stalls while sending a body the proxy needs gets `408` after the same time. All three are logged.
 - **The audit log never contains values**: no header values, JSON values, query values or bodies, and upstream errors are described in fixed words. AfterPatch logs the path as the client sent it; adapt logs the matched endpoint's pattern, such as `/api/v1/customers/{id}`, so path parameters never appear. Credentials (`Authorization`, `Cookie`, `Set-Cookie` and their proxy cousins) are never changed by adapt.
 - **Dry run changes zero bytes**, and never turns a slow answer into an error. The tests check both.
-- **Recording changes zero bytes too**, and streams. Credentials never reach a fixture file, and neither do values you list for redaction; the tests send secrets both ways and search the file for them. An exchange that can't be stored safely (too big, not text, compressed in a way record can't read, or cut off) still passes through and is logged as skipped.
+- **Recording changes zero bytes too**, and streams. Credential headers and query keys are always saved as `REDACTED`, and so are the headers, query keys and JSON fields you list; the tests send secrets both ways and search the file for them. Values in a URL path and in bodies that aren't JSON are saved as sent. An exchange that can't be stored safely (too big, not text, compressed in a way record can't read, or cut off) still passes through and is logged as skipped.
 - **Replay doesn't change data unless you ask.** Only GET and HEAD are sent without `--include-writes`.
 
 Recorded results, including the latency each tool adds, are in [test/results](test/results).
