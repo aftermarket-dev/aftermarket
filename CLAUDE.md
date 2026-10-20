@@ -88,6 +88,8 @@ AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterli
 - Oct 20 2026: CI on ubuntu-latest (moving to Ubuntu 26 from Oct 19) failed in patch's random pass-through test, in the test's direct call to its own server, not through the proxy; the same seed passes locally. CI pinned to ubuntu-24.04, and CI now copies test failures into annotations, since job logs can't be downloaded from this workspace. Revisit the pin when Ubuntu 26 settles.
 - Oct 20 2026: 0.3.0 released and verified (all archives, SHA256SUMS, latest links, downloaded binary ran record check and the live loop: the client suite recorded through record against v1, replayed 12 of 12 the same against v2 through adapt and 12 of 12 different against v2 directly). Site: AfterTest and AfterDiff reference page (/record-reference/), quick start part three, roadmap, concepts, release and testing posts, hero badge and figures from test/results. softdevstudio.com note published.
 
+- Oct 20 2026: at the owner's request, aftermarket.dev got a Use cases page (/use-cases/, in the menu) and three posts tagged "case studies" (exchange rate endpoint with patch, customer API migration with adapt, release check with record and replay). They are worked cases on stand-in services, said so in each post; every command and output comes from a real run of the 0.3.0 binary, and every snippet passes check.
+
 ## Next
 
 The approved plan is done as of 0.3.0. What comes next (AfterGuard, AfterHook, AfterConfig or something else) is decided with the owner; nothing is started until then.
