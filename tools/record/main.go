@@ -27,6 +27,7 @@ import (
 	legacycustomer "github.com/aftermarket-dev/aftermarket/examples/legacy-customer"
 	"github.com/aftermarket-dev/aftermarket/internal/adapt"
 	"github.com/aftermarket-dev/aftermarket/internal/patch"
+	"github.com/aftermarket-dev/aftermarket/internal/record"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
 	"github.com/aftermarket-dev/aftermarket/internal/version"
 )
@@ -71,6 +72,9 @@ type report struct {
 	AdaptListP50   float64 `json:"adapt_list_added_p50_us"`
 	AdaptListP99   float64 `json:"adapt_list_added_p99_us"`
 	PatchedP99     float64 `json:"patched_added_p99_us"`
+	// record saving every exchange of the customer-api v2 lookup
+	RecordP50 float64 `json:"record_added_p50_us"`
+	RecordP99 float64 `json:"record_added_p99_us"`
 }
 
 func main() {
@@ -120,6 +124,8 @@ func main() {
 	rep.AdaptLookupP99 = round(byName["adapt: v1 lookup rebuilt from v2"].P99Micros - byName["adapt: direct to v2, one customer"].P99Micros)
 	rep.AdaptListP50 = round(byName["adapt: v1 list rebuilt from v2"].P50Micros - byName["adapt: direct to v2, list"].P50Micros)
 	rep.AdaptListP99 = round(byName["adapt: v1 list rebuilt from v2"].P99Micros - byName["adapt: direct to v2, list"].P99Micros)
+	rep.RecordP50 = round(byName["record: v2 lookup saved to a fixture"].P50Micros - byName["adapt: direct to v2, one customer"].P50Micros)
+	rep.RecordP99 = round(byName["record: v2 lookup saved to a fixture"].P99Micros - byName["adapt: direct to v2, one customer"].P99Micros)
 
 	b, _ := json.MarshalIndent(rep, "", "  ")
 	if err := os.WriteFile(filepath.Join(outDir, "results.json"), append(b, '\n'), 0o644); err != nil {
@@ -233,6 +239,21 @@ func measure() ([]latencyResult, error) {
 	apxURL, stopApx := serve(apx)
 	defer stopApx()
 
+	// record in front of the same v2 service, writing every exchange to a
+	// real file.
+	fxFile, err := os.CreateTemp("", "aftermarket-record-*.yaml")
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(fxFile.Name())
+	defer fxFile.Close()
+	rpx, err := record.New(record.Options{Upstream: v2u, Out: fxFile})
+	if err != nil {
+		return nil, err
+	}
+	rpxURL, stopRpx := serve(rpx)
+	defer stopRpx()
+
 	cases := []struct {
 		name, url, want string
 	}{
@@ -243,6 +264,7 @@ func measure() ([]latencyResult, error) {
 		{"adapt: v1 lookup rebuilt from v2", apxURL + "/api/v1/customer?id=7", `{"customer_id":7,"name":"Ada Lovelace"`},
 		{"adapt: direct to v2, list", v2URL + "/api/v2/customers", `"data":[`},
 		{"adapt: v1 list rebuilt from v2", apxURL + "/api/v1/customers", `[{"customer_id":7,`},
+		{"record: v2 lookup saved to a fixture", rpxURL + "/api/v2/customers/7", `"full_name":"Ada Lovelace"`},
 	}
 	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 64, DisableCompression: true}}
 	get := func(u, want string) (time.Duration, error) {
@@ -343,7 +365,7 @@ func summary(r report) string {
 		}
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", t.Package, t.Test, t.Result)
 	}
-	b.WriteString("\n## Latency\n\nOver loopback, 20,000 sequential requests per row after a 2,000 request warm-up, then 16 clients for 2 seconds. The first three rows are patch with the legacy-customer example; the adapt rows are the customer-api example, where the list has three customers.\n\n")
+	b.WriteString("\n## Latency\n\nOver loopback, 20,000 sequential requests per row after a 2,000 request warm-up, then 16 clients for 2 seconds. The first three rows are patch with the legacy-customer example; the adapt rows are the customer-api example, where the list has three customers. The record row saves every exchange to a fixture file on disk.\n\n")
 	b.WriteString("| Path | p50 | p99 | Requests/s (16 clients) |\n| --- | --- | --- | --- |\n")
 	for _, l := range r.Latency {
 		fmt.Fprintf(&b, "| %s | %.1f µs | %.1f µs | %.0f |\n", l.Name, l.P50Micros, l.P99Micros, l.ReqPerSec)
@@ -352,5 +374,6 @@ func summary(r report) string {
 	fmt.Fprintf(&b, "Added by the proxy with both example rules applied: %.1f µs at p50, %.1f µs at p99.\n", r.PatchedP50, r.PatchedP99)
 	fmt.Fprintf(&b, "Added by adapt rebuilding a v1 lookup from v2: %.1f µs at p50, %.1f µs at p99.\n", r.AdaptLookupP50, r.AdaptLookupP99)
 	fmt.Fprintf(&b, "Added by adapt rebuilding a v1 list from v2: %.1f µs at p50, %.1f µs at p99.\n", r.AdaptListP50, r.AdaptListP99)
+	fmt.Fprintf(&b, "Added by record saving a v2 lookup to a fixture file: %.1f µs at p50, %.1f µs at p99.\n", r.RecordP50, r.RecordP99)
 	return b.String()
 }

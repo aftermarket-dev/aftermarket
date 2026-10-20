@@ -105,7 +105,7 @@ jobs:
             cp LICENSE NOTICE README.md THIRD_PARTY_LICENSES.md "$work/"
             mkdir -p "$work/examples/legacy-customer" "$work/examples/customer-api"
             cp examples/legacy-customer/rules.yaml examples/legacy-customer/fixture.yaml "$work/examples/legacy-customer/"
-            cp examples/customer-api/adapt.yaml examples/customer-api/fixture.yaml "$work/examples/customer-api/"
+            cp examples/customer-api/adapt.yaml examples/customer-api/fixture.yaml examples/customer-api/record.yaml "$work/examples/customer-api/"
             if [ "$os" = windows ]; then
               (cd "$(dirname "$work")" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
             else
@@ -168,6 +168,7 @@ jobs:
           $PREFIX "$bin" patch test --config examples/legacy-customer/rules.yaml --fixture examples/legacy-customer/fixture.yaml
           $PREFIX "$bin" adapt check --config examples/customer-api/adapt.yaml
           $PREFIX "$bin" adapt test --config examples/customer-api/adapt.yaml --fixture examples/customer-api/fixture.yaml
+          $PREFIX "$bin" record check --config examples/customer-api/record.yaml
 
   publish:
     needs: [plan, build, smoke]

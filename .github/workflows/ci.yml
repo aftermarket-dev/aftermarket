@@ -30,3 +30,4 @@ jobs:
         run: |
           go run ./cmd/aftermarket patch test --config examples/legacy-customer/rules.yaml --fixture examples/legacy-customer/fixture.yaml
           go run ./cmd/aftermarket adapt test --config examples/customer-api/adapt.yaml --fixture examples/customer-api/fixture.yaml
+          go run ./cmd/aftermarket record check --config examples/customer-api/record.yaml

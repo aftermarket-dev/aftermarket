@@ -2,16 +2,18 @@
 
 Tools that repair, adapt, test and preserve software you can't change.
 
-Aftermarket is one program, `aftermarket`, with a subcommand per tool. Each tool is a small reverse proxy that sits between a client and the service it calls. The client and the service stay exactly as they are.
+Aftermarket is one program, `aftermarket`, with a subcommand per tool. The tools sit between a client and the service it calls, or replay what passed between them. The client and the service stay exactly as they are.
 
 - **AfterPatch** (`aftermarket patch`) fixes traffic with small rules you can read. Rename a JSON field, add or drop a header, move a path.
 - **AfterAPI** (`aftermarket adapt`) keeps an old client working after its API was replaced. You describe each old endpoint in terms of the new one, and adapt translates the request on the way in and rebuilds the old response on the way out.
+- **AfterTest** (`aftermarket record`) saves real traffic as test fixtures, with credentials and any values you list blanked out.
+- **AfterDiff** (`aftermarket replay`) sends those fixtures to two versions of a service and reports where the answers differ.
 
 It's a single Go binary with no dependencies, licensed under Apache 2.0. Website: [aftermarket.dev](https://aftermarket.dev/).
 
 ## Which tool?
 
-Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits.
+Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic.
 
 ## AfterPatch in one example
 
@@ -104,6 +106,34 @@ endpoints:
 
 The full example, with a search endpoint as well, is [`examples/customer-api`](examples/customer-api). It has the old v1 service, the new v2 service and the old client's test suite: twelve checks of fields, status codes and error messages. The suite passes against v1, fails every check against v2 directly, and passes every check against v2 through adapt. The full mapping format is in [docs/adapt.md](docs/adapt.md).
 
+## AfterTest and AfterDiff in one example
+
+Put record in front of the old service and run the old client's tests through it:
+
+```sh
+aftermarket record --upstream http://127.0.0.1:9001 --out recorded.yaml --listen 127.0.0.1:8090
+```
+
+Every request and answer passes through unchanged, and each finished exchange is written to `recorded.yaml` as a fixture case. `Authorization`, cookies and other credentials are saved as `REDACTED`; a config file can add more headers, query keys and JSON fields. Then send the recording to the old service and the new one:
+
+```sh
+aftermarket replay --fixture recorded.yaml --a http://127.0.0.1:9001 --b http://127.0.0.1:8080
+```
+
+replay compares status codes, `Content-Type` and bodies. JSON is compared by meaning, so key order and number formatting don't count, and each difference is listed by path:
+
+```text
+### 1 GET /api/v1/customer
+
+`GET /api/v1/customer?id=7`
+
+- status: 200 vs 404
+- customer_id: only in A (7)
+- error: only in B (an object)
+```
+
+By default replay sends only GET and HEAD requests, so it can't change data; `--include-writes` sends the rest. It exits 1 when anything differs, so it fits in CI. In the customer-api example, the old client's twelve checks are recorded against v1. Replayed against v2 directly, all twelve differ. Replayed against v2 through adapt, all twelve answers are the same. The full format is in [docs/record.md](docs/record.md).
+
 ## Install
 
 Download the archive for your system from the [latest release](https://github.com/aftermarket-dev/aftermarket/releases/latest), unpack it and put `aftermarket` on your PATH.
@@ -159,13 +189,21 @@ aftermarket adapt run   --config adapt.yaml --upstream URL [same options as patc
 aftermarket adapt check --config adapt.yaml
 aftermarket adapt test  --config adapt.yaml --fixture fixture.yaml
 
+aftermarket record --upstream URL --out fixture.yaml [--config record.yaml] [--listen ADDR]
+aftermarket record check --config record.yaml
+aftermarket replay --fixture fixture.yaml --a URL [--b URL] [--include-writes]
+                   [--ignore PATH] [--header NAME] [--set-header "Name: value"]
+                   [--report FILE] [--json FILE]
+
 aftermarket version
 ```
 
 - **`run`** starts the proxy. `--listen` defaults to `127.0.0.1:8080`. `--audit-log -` (the default) writes to stderr, a file name appends to that file, and an empty value turns the log off.
 - **`--dry-run`** forwards every request and response untouched and logs what would have changed. Use it to try new rules or mappings on live traffic.
 - **`check`** validates the file, lists what's in it, and points out entries that can match the same traffic. For patch that's allowed: rules run in file order. For adapt the first matching endpoint wins, so a later one may never be reached for those requests.
-- **`test`** runs saved requests and responses through the proxy against a stand-in upstream and compares the results with what you expect. Both tools use the same fixture format. It exits 1 if any case fails, so it fits in CI.
+- **`test`** runs saved requests and responses through the proxy against a stand-in upstream and compares the results with what you expect. All the tools use the same fixture format, so a recording from `record` can be run with `patch test` or `adapt test`. It exits 1 if any case fails, so it fits in CI.
+- **`record`** never overwrites a file: `--out` must not exist yet. The file is a valid fixture after every case, so stop it with Ctrl-C whenever you have enough.
+- **`replay`** without `--b` compares one service with the answers in the recording.
 - The proxy answers `GET /_aftermarket/healthz` itself with `200 ok`. It sits under `/_aftermarket/` so it never hides an upstream `/healthz`. Change it with `--health-path`, or pass an empty value to turn it off.
 
 ## What the tools promise
@@ -180,6 +218,8 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **A dead upstream gets a clean `502` and a slow one a `504`** after `upstream_timeout` (30 seconds by default). That includes a body the proxy is waiting for. A client that stalls while sending a body the proxy needs gets `408` after the same time. All three are logged.
 - **The audit log never contains values**: no header values, JSON values, query values or bodies, and upstream errors are described in fixed words. AfterPatch logs the path as the client sent it; adapt logs the matched endpoint's pattern, such as `/api/v1/customers/{id}`, so path parameters never appear. Credentials (`Authorization`, `Cookie`, `Set-Cookie` and their proxy cousins) are never changed by adapt.
 - **Dry run changes zero bytes**, and never turns a slow answer into an error. The tests check both.
+- **Recording changes zero bytes too**, and streams. Credentials never reach a fixture file, and neither do values you list for redaction; the tests send secrets both ways and search the file for them. An exchange that can't be stored safely (too big, not text, compressed in a way record can't read, or cut off) still passes through and is logged as skipped.
+- **Replay doesn't change data unless you ask.** Only GET and HEAD are sent without `--include-writes`.
 
 Recorded results, including the latency each tool adds, are in [test/results](test/results).
 
@@ -192,6 +232,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - Captured parameters are always strings. A template that needs a number from the URL gets `"7"`, not `7`.
 - Config files use a strict subset of YAML: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
 - One upstream per proxy. Run one proxy per service.
+- record redacts headers, query values and JSON fields. Values in a URL path and in bodies that aren't JSON are stored as sent, so keep those out with `when:`. Binary bodies aren't recorded at all.
 
 ## Building and testing
 
@@ -202,7 +243,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.2.0 adds `aftermarket adapt` (AfterAPI). Next come `aftermarket record` and `replay` (AfterTest and AfterDiff), to capture real traffic and compare two versions of a service. The plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.3.0 adds `aftermarket record` and `replay` (AfterTest and AfterDiff). 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 
