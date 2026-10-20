@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/aftermarket-dev/aftermarket/internal/audit"
 	"github.com/aftermarket-dev/aftermarket/internal/httpx"
@@ -46,6 +47,7 @@ type plan struct {
 	queryKeys []string
 	ep        *Endpoint
 	params    map[string]string
+	skipped   bool // matched, but passes through unchanged
 
 	// the new request
 	newMethod string
@@ -120,18 +122,31 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteHealth(w)
 		return
 	}
-	pl := p.plan(r)
+	pl, answered := p.plan(w, r)
+	if answered {
+		return
+	}
 	if pl != nil {
 		r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, pl))
 	}
 	p.rp.ServeHTTP(w, r)
 }
 
+// skip records why a matched request passes through unchanged. The plan is
+// kept so an upstream error is logged with the same request id and the
+// endpoint's pattern.
+func (p *Proxy) skip(pl *plan, reason string) *plan {
+	pl.skipped = true
+	p.event(pl, "request", audit.Skipped, 0, nil, nil, reason)
+	return pl
+}
+
 // plan finds the endpoint for r and works out the new request. It returns
-// nil when the request passes through unchanged.
-func (p *Proxy) plan(r *http.Request) *plan {
+// nil when no endpoint matches. answered is set when the proxy already
+// replied (a stalled request body).
+func (p *Proxy) plan(w http.ResponseWriter, r *http.Request) (*plan, bool) {
 	if httpx.UnsafePath(r.URL) {
-		return nil
+		return nil, false
 	}
 	segs := strings.Split(r.URL.Path, "/")[1:]
 	query, _ := url.ParseQuery(r.URL.RawQuery)
@@ -146,7 +161,7 @@ func (p *Proxy) plan(r *http.Request) *plan {
 		}
 	}
 	if ep == nil {
-		return nil
+		return nil, false
 	}
 	// The audit log shows the endpoint's pattern, never parameter values.
 	pl := &plan{id: p.reqID.Add(1), method: r.Method, path: ep.Old.PathPattern(), ep: ep, params: params}
@@ -155,8 +170,12 @@ func (p *Proxy) plan(r *http.Request) *plan {
 	}
 	sort.Strings(pl.queryKeys)
 	if skip != "" {
-		p.event(pl, "request", audit.Skipped, 0, nil, nil, skip)
-		return nil
+		return p.skip(pl, skip), false
+	}
+	for _, name := range sortedKeys(params) {
+		if !utf8.ValidString(params[name]) {
+			return p.skip(pl, "parameter "+name+" is not valid UTF-8"), false
+		}
 	}
 
 	var applied, notApplied []string
@@ -165,7 +184,7 @@ func (p *Proxy) plan(r *http.Request) *plan {
 		applied = append(applied, "method "+r.Method+" -> "+pl.newMethod)
 	}
 	pl.newPath, pl.newQuery = ep.New.render(params)
-	pl.newQuery = joinQuery(pl.newQuery, leftoverQuery(r.URL.RawQuery, ep.Old.Query))
+	pl.newQuery = joinQuery(pl.newQuery, leftoverQuery(r.URL.RawQuery, ep.Old.Query, ep.New.queryKeys()))
 	if pl.newPath != r.URL.EscapedPath() {
 		applied = append(applied, "rewrite path")
 	}
@@ -183,6 +202,11 @@ func (p *Proxy) plan(r *http.Request) *plan {
 			case r.Body == nil || r.Body == http.NoBody:
 				reason = "request has no body"
 			default:
+				if err := httpx.BufferRequestBody(w, r, p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout); err != nil {
+					p.skip(pl, err.Error())
+					httpx.WriteRequestTimeout(w)
+					return pl, true
+				}
 				jb, restored, _ := httpx.ReadJSON(r.Body, r.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, 0, "request")
 				r.Body = restored
 				if !jb.OK {
@@ -194,24 +218,21 @@ func (p *Proxy) plan(r *http.Request) *plan {
 			}
 			if reason != "" {
 				// Nothing is half-translated: the request goes on as it came.
-				p.event(pl, "request", audit.Skipped, 0, nil, nil, reason)
-				return nil
+				return p.skip(pl, reason), false
 			}
 		}
 		v, missing, err := t.Build(doc, params)
 		if err != nil {
-			p.event(pl, "request", audit.Skipped, 0, nil, nil, "request body could not be built: "+err.Error())
-			return nil
+			return p.skip(pl, "request body could not be built: "+err.Error()), false
 		}
 		out, err := ojson.Encode(v)
 		if err != nil {
-			p.event(pl, "request", audit.Skipped, 0, nil, nil, "request body could not be built")
-			return nil
+			return p.skip(pl, "request body could not be built"), false
 		}
 		pl.newBody, pl.bodySet = out, true
 		applied = append(applied, "rebuild body")
 		notApplied = append(notApplied, missing...)
-	} else if (pl.newMethod == http.MethodGet || pl.newMethod == http.MethodHead) && (r.ContentLength > 0 || len(r.TransferEncoding) > 0) {
+	} else if (pl.newMethod == http.MethodGet || pl.newMethod == http.MethodHead) && r.Body != nil && r.Body != http.NoBody {
 		pl.dropBody = true
 		applied = append(applied, "drop body ("+pl.newMethod+" has none)")
 	}
@@ -229,12 +250,22 @@ func (p *Proxy) plan(r *http.Request) *plan {
 	p.event(pl, "request", kind, 0, applied, notApplied, "")
 	// In a dry run the plan is kept so the response side is reported too,
 	// but nothing is changed.
-	return pl
+	return pl, false
+}
+
+func sortedKeys(m map[string]string) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // leftoverQuery returns the parts of a raw query string that the old
-// pattern did not capture, exactly as the client wrote them.
-func leftoverQuery(raw string, captured []queryCapture) string {
+// pattern did not capture and the new one does not set, exactly as the
+// client wrote them.
+func leftoverQuery(raw string, captured []queryCapture, newKeys []string) string {
 	if raw == "" {
 		return ""
 	}
@@ -246,6 +277,11 @@ func leftoverQuery(raw string, captured []queryCapture) string {
 		if err == nil {
 			for _, q := range captured {
 				if q.key == key {
+					drop = true
+				}
+			}
+			for _, k := range newKeys {
+				if k == key {
 					drop = true
 				}
 			}
@@ -281,6 +317,11 @@ func headerPlan(h http.Header, m HeaderMap) []headerAction {
 		desc := "rename header " + from + " -> " + to
 		if _, ok := h[from]; !ok {
 			out = append(out, headerAction{desc: desc + " (not present)"})
+			continue
+		}
+		if _, ok := h[to]; ok {
+			// Never overwrite values the other side sent under the new name.
+			out = append(out, headerAction{desc: desc + " (" + to + " already present)"})
 			continue
 		}
 		out = append(out, headerAction{desc: desc, applied: true, do: func(h http.Header) {
@@ -323,7 +364,8 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 	pr.SetURL(p.opts.Upstream)
 	// Forward the query string exactly as the client sent it.
 	raw := pr.In.URL.RawQuery
-	if pl != nil && !p.opts.DryRun {
+	active := pl != nil && !pl.skipped && !p.opts.DryRun
+	if active {
 		raw = pl.newQuery
 	}
 	pr.Out.URL.RawQuery = joinQuery(p.opts.Upstream.RawQuery, raw)
@@ -332,7 +374,7 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 			pr.Out.Header[h] = v
 		}
 	}
-	if pl == nil || p.opts.DryRun {
+	if !active {
 		return
 	}
 	out := pr.Out
@@ -342,7 +384,6 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 		out.URL.Path = httpx.JoinPath(p.opts.Upstream.Path, plain)
 		out.URL.RawPath = httpx.JoinPath(p.opts.Upstream.EscapedPath(), pl.newPath)
 	}
-	applyHeaderPlan(out.Header, headerPlan(out.Header, pl.ep.Request.Headers))
 	switch {
 	case pl.bodySet:
 		body := pl.newBody
@@ -366,6 +407,8 @@ func (p *Proxy) rewrite(pr *httputil.ProxyRequest) {
 			out.Header.Del(h)
 		}
 	}
+	// Header actions come last, so what the mapping says explicitly wins.
+	applyHeaderPlan(out.Header, headerPlan(out.Header, pl.ep.Request.Headers))
 }
 
 func noBody(method string, status int) bool {
@@ -375,7 +418,7 @@ func noBody(method string, status int) bool {
 // modifyResponse rebuilds the response in the old shape.
 func (p *Proxy) modifyResponse(resp *http.Response) error {
 	pl, _ := resp.Request.Context().Value(ctxKey{}).(*plan)
-	if pl == nil {
+	if pl == nil || pl.skipped {
 		return nil
 	}
 	m := pl.ep.Response
@@ -413,7 +456,11 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 			case !httpx.IsJSON(resp.Header.Get("Content-Type")):
 				ok, reason = false, "response body is not JSON"
 			default:
-				jb, restored, err := httpx.ReadJSON(resp.Body, resp.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout, "response")
+				deadline := p.opts.Config.UpstreamTimeout
+				if p.opts.DryRun {
+					deadline = 0 // a dry run never turns a slow answer into an error
+				}
+				jb, restored, err := httpx.ReadJSON(resp.Body, resp.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, deadline, "response")
 				if err != nil {
 					return err // 504 from errorHandler
 				}
@@ -468,7 +515,6 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 		resp.StatusCode = to
 		resp.Status = fmt.Sprintf("%d %s", to, http.StatusText(to))
 	}
-	applyHeaderPlan(resp.Header, hacts)
 	switch {
 	case bodySet:
 		if !gzipBody {
@@ -487,6 +533,8 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 		// A bodyless status became one that has a body: say it is empty.
 		httpx.SetResponseBody(resp, []byte{})
 	}
+	// Header actions come last, so what the mapping says explicitly wins.
+	applyHeaderPlan(resp.Header, hacts)
 	return nil
 }
 
@@ -497,11 +545,14 @@ func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) 
 	}
 	status, reason := httpx.UpstreamReason(err)
 	if pl, _ := r.Context().Value(ctxKey{}).(*plan); pl != nil {
+		// Matched requests, translated or skipped, log the pattern.
 		p.opts.Audit.Write(audit.Event{
 			Event: audit.UpstreamError, Request: pl.id, Rule: pl.ep.ID, Method: pl.method,
 			Path: pl.path, QueryKeys: pl.queryKeys, Status: status, Reason: reason,
 		})
 	} else {
+		// No endpoint matched, so there are no parameters to hide; like
+		// AfterPatch, the path is the one the client sent.
 		p.opts.Audit.Write(audit.Event{
 			Event: audit.UpstreamError, Request: p.reqID.Add(1), Method: r.Method,
 			Path: r.URL.Path, Status: status, Reason: reason,

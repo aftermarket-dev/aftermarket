@@ -177,9 +177,9 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **An adapt mapping applies fully or not at all.** If the request can't be translated, it goes on exactly as the client sent it. If the response can't be rebuilt, it comes back exactly as the upstream sent it, status and headers included. Nothing is half translated.
 - **Gzip bodies are decoded, changed and compressed again**, and `Content-Length` is corrected. `ETag` and digest headers that described the old bytes are removed.
 - **Paths can't be tricked by `..`.** A rule with a `path` condition, or an adapt endpoint, never matches a path with `.` or `..` segments or an encoded slash. A value that goes into a new path must stay inside one segment: `..`, `.` and anything with a slash are refused.
-- **A dead upstream gets a clean `502` and a slow one a `504`** after `upstream_timeout` (30 seconds by default). That includes a body the proxy is waiting for. Both are logged.
-- **The audit log never contains values**: no header values, JSON values, query values, path parameters or bodies, and upstream errors are described in fixed words. Credentials (`Authorization`, `Cookie`, `Set-Cookie` and their proxy cousins) are never changed by adapt.
-- **Dry run changes zero bytes.** The tests check that too.
+- **A dead upstream gets a clean `502` and a slow one a `504`** after `upstream_timeout` (30 seconds by default). That includes a body the proxy is waiting for. A client that stalls while sending a body the proxy needs gets `408` after the same time. All three are logged.
+- **The audit log never contains values**: no header values, JSON values, query values or bodies, and upstream errors are described in fixed words. AfterPatch logs the path as the client sent it; adapt logs the matched endpoint's pattern, such as `/api/v1/customers/{id}`, so path parameters never appear. Credentials (`Authorization`, `Cookie`, `Set-Cookie` and their proxy cousins) are never changed by adapt.
+- **Dry run changes zero bytes**, and never turns a slow answer into an error. The tests check both.
 
 Recorded results, including the latency each tool adds, are in [test/results](test/results).
 

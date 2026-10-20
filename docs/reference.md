@@ -28,7 +28,7 @@ Unknown keys are errors, so a typo never fails silently. `aftermarket patch chec
 | `max_body` | `1MiB` | A byte count, or a number with `B`, `KB`, `MB`, `GB` (powers of 1000) or `KiB`, `MiB`, `GiB` (powers of 1024). At most `1GiB`. |
 | `upstream_timeout` | `30s` | A Go duration such as `500ms`, `30s` or `2m`. |
 
-A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`. The same happens when a response body that a rule needs to change doesn't arrive in full within `upstream_timeout` after the headers. Bodies no rule needs are streamed and have no time limit.
+A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`. The same happens when a response body that a rule needs to change doesn't arrive in full within `upstream_timeout` after the headers, except in a dry run, which waits as long as it takes. A client whose request body a rule needs, and which stalls mid-body for longer than `upstream_timeout`, gets `408`. Bodies no rule needs are streamed and have no time limit.
 
 ### when
 
@@ -99,7 +99,7 @@ Operations run in the order written. Paths are dot-separated. A number selects a
 | `set` | `{path: a.b, value: 1}` | Sets a value and creates missing objects along the way. |
 | `delete` | `{path: a.b}` | Removes a key or array element. |
 
-`set` values are written in YAML. Unquoted `true`, `false` and numbers become JSON booleans and numbers. `null` and `~` become JSON null. Anything quoted is a string. Lists and mappings become JSON arrays and objects.
+`set` values are written in YAML. Unquoted `true` and `false` become JSON booleans, unquoted `null`, `Null`, `NULL` and `~` become null, and unquoted numbers in JSON's own format (`3`, `-12`, `2.50`, `1e3`) become JSON numbers with their exact text. A number too large for JSON readers, such as `1e400`, is an error. Everything else is a string, including `yes`, `True`, `0x1F` and `007`, and anything quoted. Lists and mappings become JSON arrays and objects.
 
 An operation that can't apply, such as a `rename` whose source is missing, is skipped and listed under `not_applied` in the audit log. The rest of the rule still runs.
 

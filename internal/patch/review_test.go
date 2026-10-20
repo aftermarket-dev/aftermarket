@@ -292,3 +292,46 @@ func Test204AuditSaysNoBody(t *testing.T) {
 		t.Fatalf("audit = %+v", e)
 	}
 }
+
+// Found in the 0.2.0 review; both date from 0.1.0.
+
+func TestDryRunNeverTurnsSlowAnswersInto504(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"customer":`)
+		w.(http.Flusher).Flush()
+		time.Sleep(600 * time.Millisecond)
+		io.WriteString(w, `{"full_name":"Ada"}}`)
+	}))
+	defer up.Close()
+	cfg := "limits: {upstream_timeout: 300ms}\n" + strings.TrimPrefix(shapeRule, "\nlimits: {max_body: 4KiB}")
+	h := startProxy(t, cfg, up.URL, true)
+	got := do(t, "GET", h.proxyURL+"/c/1", nil, nil)
+	if got.status != 200 || string(got.body) != `{"customer":{"full_name":"Ada"}}` {
+		t.Fatalf("dry run changed the answer: %d %s", got.status, got.body)
+	}
+}
+
+func TestStalledRequestBodyGets408(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer up.Close()
+	h := startProxy(t, "limits: {upstream_timeout: 300ms}\n"+strings.TrimPrefix(requestRules, "\n"), up.URL, false)
+	conn, err := net.Dial("tcp", strings.TrimPrefix(h.proxyURL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(conn, "POST /orders HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"qty\":")
+	start := time.Now()
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer to a stalled body: %v", err)
+	}
+	if resp.StatusCode != 408 || time.Since(start) > 3*time.Second {
+		t.Fatalf("status %d after %v", resp.StatusCode, time.Since(start))
+	}
+	if e := lastEvent(t, h); e.Event != audit.Skipped || !strings.Contains(e.Reason, "did not arrive") {
+		t.Fatalf("audit = %+v", e)
+	}
+}

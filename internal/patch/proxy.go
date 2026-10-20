@@ -121,6 +121,21 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			st.respRules = append(st.respRules, rule)
 		}
 	}
+	// A body a rule will read is buffered here, under upstream_timeout, so a
+	// client that stalls mid-body can't hold the proxy forever.
+	for _, rule := range st.reqRules {
+		if !rule.Request.HasBodyOps() || !httpx.IsJSON(r.Header.Get("Content-Type")) {
+			continue
+		}
+		if err := httpx.BufferRequestBody(w, r, p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout); err != nil {
+			for _, rr := range st.reqRules {
+				p.event(st, rr, "request", audit.Skipped, 0, nil, nil, err.Error())
+			}
+			httpx.WriteRequestTimeout(w)
+			return
+		}
+		break
+	}
 	ctx := context.WithValue(r.Context(), ctxKey{}, st)
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }
@@ -207,7 +222,7 @@ func (p *Proxy) requestPhase(pr *httputil.ProxyRequest, st *state) {
 		case out.Body == nil || out.Body == http.NoBody:
 			bodySkip = "request has no body"
 		default:
-			// Requests have no read deadline: the server's own timeouts apply.
+			// The body was buffered under a deadline in ServeHTTP.
 			jb, out.Body, _ = httpx.ReadJSON(out.Body, out.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, 0, "request")
 			bodySkip = jb.Skip
 		}
@@ -340,7 +355,11 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 		default:
 			var restored io.ReadCloser
 			var err error
-			jb, restored, err = httpx.ReadJSON(resp.Body, resp.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout, "response")
+			deadline := p.opts.Config.UpstreamTimeout
+			if p.opts.DryRun {
+				deadline = 0 // a dry run never turns a slow answer into an error
+			}
+			jb, restored, err = httpx.ReadJSON(resp.Body, resp.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, deadline, "response")
 			if err != nil {
 				return err // answered with 504 by errorHandler; the proxy closes the old body
 			}

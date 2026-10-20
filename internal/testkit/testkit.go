@@ -212,3 +212,24 @@ func Gunzip(t testing.TB, b []byte) []byte {
 	}
 	return out
 }
+
+// DoChunked sends a request whose body has no declared length, so it goes
+// out chunked.
+func DoChunked(t testing.TB, method, u string, h http.Header, body []byte) Response {
+	t.Helper()
+	req, err := http.NewRequest(method, u, io.NopCloser(bytes.NewReader(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = -1
+	for k, v := range h {
+		req.Header[k] = v
+	}
+	resp, err := Client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, u, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return Response{Status: resp.StatusCode, Header: resp.Header, Body: b}
+}

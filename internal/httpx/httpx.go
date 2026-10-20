@@ -331,3 +331,43 @@ func ReadJSON(rc io.ReadCloser, contentEncoding string, max int64, deadline time
 	}
 	return res, restored, nil
 }
+
+// ErrRequestBodyTimeout is returned when a client's body does not arrive in
+// time.
+var ErrRequestBodyTimeout = errors.New("request body did not arrive within upstream_timeout")
+
+// BufferRequestBody reads up to max bytes of the client's body within d and
+// puts it back on r, so later readers get the original bytes from memory. A
+// body larger than max keeps streaming after the first max bytes. If the
+// body stalls, it returns ErrRequestBodyTimeout and the request can't be
+// forwarded.
+func BufferRequestBody(w http.ResponseWriter, r *http.Request, max int64, d time.Duration) error {
+	if r.Body == nil || r.Body == http.NoBody {
+		return nil
+	}
+	rc := http.NewResponseController(w)
+	deadlineSet := rc.SetReadDeadline(time.Now().Add(d)) == nil
+	br, err := ReadBody(r.Body, max)
+	if deadlineSet {
+		_ = rc.SetReadDeadline(time.Time{})
+	}
+	var ne net.Error
+	if err != nil && !errors.Is(err, ErrTooLarge) {
+		if errors.As(err, &ne) && ne.Timeout() {
+			return ErrRequestBodyTimeout
+		}
+		// Any other read error: forward what arrived and let the upstream
+		// see the same broken body the proxy saw.
+	}
+	r.Body = br.Restore()
+	return nil
+}
+
+// WriteRequestTimeout answers a client whose body stalled.
+func WriteRequestTimeout(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Aftermarket-Error", "408")
+	w.Header().Set("Connection", "close")
+	w.WriteHeader(http.StatusRequestTimeout)
+	_, _ = w.Write([]byte("aftermarket: request body timed out\n"))
+}

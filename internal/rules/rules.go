@@ -9,6 +9,7 @@ package rules
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/textproto"
 	"os"
@@ -664,6 +665,10 @@ func (l *loader) jsonOp(n *yamlite.Node) (JSONOp, bool) {
 			ok = false
 		} else {
 			op.Value = NodeToJSON(v)
+			if err := CheckNumbers(op.Value); err != nil {
+				l.errf(v.Line, "%v", err)
+				ok = false
+			}
 		}
 	case "delete":
 		l.onlyKeys(body, "path")
@@ -946,4 +951,30 @@ func ParseStatus(s string) (int, error) {
 		return 0, fmt.Errorf("status %q must be a code such as 200", s)
 	}
 	return sm.Code, nil
+}
+
+// CheckNumbers rejects JSON numbers that most readers can't hold, such as
+// 1e400, which would turn into infinity or an error downstream.
+func CheckNumbers(v any) error {
+	switch t := v.(type) {
+	case json.Number:
+		f, err := strconv.ParseFloat(string(t), 64)
+		if err != nil || math.IsInf(f, 0) {
+			return fmt.Errorf("number %s is too large for JSON readers; quote it to send a string", t)
+		}
+	case []any:
+		for _, it := range t {
+			if err := CheckNumbers(it); err != nil {
+				return err
+			}
+		}
+	case *ojson.Object:
+		for _, k := range t.Keys() {
+			x, _ := t.Get(k)
+			if err := CheckNumbers(x); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

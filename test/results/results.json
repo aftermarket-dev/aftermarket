@@ -1,13 +1,13 @@
 {
-  "version": "0.2.0-dev",
-  "recorded_at": "2026-10-20T07:19:14Z",
+  "version": "0.2.0",
+  "recorded_at": "2026-10-20T07:34:33Z",
   "go_version": "go1.24.7",
   "os": "linux",
   "arch": "amd64",
   "cpus": 2,
-  "tests_passed": 217,
+  "tests_passed": 234,
   "tests_failed": 0,
-  "tests_total": 217,
+  "tests_total": 234,
   "tests": [
     {
       "package": "cmd/aftermarket",
@@ -55,7 +55,7 @@
       "package": "cmd/aftermarket",
       "test": "TestTestFailingFixture",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
     },
     {
       "package": "cmd/aftermarket",
@@ -97,29 +97,41 @@
       "package": "examples/customer-api",
       "test": "TestV2BreaksTheOldClient",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
     },
     {
       "package": "examples/legacy-customer",
       "test": "TestFixtureFilePasses",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
     },
     {
       "package": "examples/legacy-customer",
       "test": "TestOldClientNeedsTheRules",
       "result": "pass",
-      "seconds": 0.02
+      "seconds": 0.01
     },
     {
       "package": "examples/legacy-customer",
       "test": "TestRemovingEitherRuleBreaksTheClient",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
     },
     {
       "package": "internal/adapt",
       "test": "TestAuditNeverContainsValues",
+      "result": "pass",
+      "seconds": 0.01
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestCheckReportsEveryProblemInLineOrder",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestChunkedRequestBodyIsDroppedForGet",
       "result": "pass",
       "seconds": 0
     },
@@ -127,7 +139,7 @@
       "package": "internal/adapt",
       "test": "TestConcurrencySoak",
       "result": "pass",
-      "seconds": 3.03
+      "seconds": 3.06
     },
     {
       "package": "internal/adapt",
@@ -143,15 +155,39 @@
     },
     {
       "package": "internal/adapt",
-      "test": "TestGzipResponseIsRebuiltAndRecompressed",
+      "test": "TestDryRunCoversEveryKindOfChange",
       "result": "pass",
       "seconds": 0.02
     },
     {
       "package": "internal/adapt",
-      "test": "TestHeadersRenameAndCredentialsPassUntouched",
+      "test": "TestDryRunNeverTurnsSlowAnswersInto504",
+      "result": "pass",
+      "seconds": 0.6
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestExplicitHeadersWinOverRebuildDefaults",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestGzipResponseIsRebuiltAndRecompressed",
       "result": "pass",
       "seconds": 0.01
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestHeaderMapOverlapsAreRejected",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestHeadersRenameAndCredentialsPassUntouched",
+      "result": "pass",
+      "seconds": 0
     },
     {
       "package": "internal/adapt",
@@ -161,7 +197,25 @@
     },
     {
       "package": "internal/adapt",
+      "test": "TestHugeNumbersAreRejected",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestInvalidUTF8ParameterIsSkipped",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
       "test": "TestLeftoverQuery",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestLeftoverQueryNeverOverridesTranslatedKeys",
       "result": "pass",
       "seconds": 0
     },
@@ -361,7 +415,19 @@
       "package": "internal/adapt",
       "test": "TestQueryStringsKeepTheirBytes",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestRenameNeverOverwritesExistingValues",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestRepeatedParameterChecksHeadersFirst",
+      "result": "pass",
+      "seconds": 0
     },
     {
       "package": "internal/adapt",
@@ -377,9 +443,27 @@
     },
     {
       "package": "internal/adapt",
+      "test": "TestResponseSkipLeavesHeadersAlone",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestSkippedMatchThenUpstreamErrorLogsPatternAndSameID",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
       "test": "TestSlowUpstreamAndStalledBodyGive504",
       "result": "pass",
       "seconds": 0.61
+    },
+    {
+      "package": "internal/adapt",
+      "test": "TestStalledRequestBodyGets408",
+      "result": "pass",
+      "seconds": 0.3
     },
     {
       "package": "internal/adapt",
@@ -413,9 +497,15 @@
     },
     {
       "package": "internal/adapt",
+      "test": "TestUnmatchedResponseStreams",
+      "result": "pass",
+      "seconds": 0
+    },
+    {
+      "package": "internal/adapt",
       "test": "TestUnmatchedTrafficIsByteIdentical",
       "result": "pass",
-      "seconds": 1.24
+      "seconds": 2.41
     },
     {
       "package": "internal/adapt",
@@ -493,7 +583,7 @@
       "package": "internal/patch",
       "test": "TestAuditNeverContainsValues",
       "result": "pass",
-      "seconds": 0
+      "seconds": 0.01
     },
     {
       "package": "internal/patch",
@@ -511,7 +601,7 @@
       "package": "internal/patch",
       "test": "TestChangedBodyDropsTrailersAndDigests",
       "result": "pass",
-      "seconds": 0
+      "seconds": 0.01
     },
     {
       "package": "internal/patch",
@@ -523,7 +613,7 @@
       "package": "internal/patch",
       "test": "TestConcurrencySoak",
       "result": "pass",
-      "seconds": 2.74
+      "seconds": 2.07
     },
     {
       "package": "internal/patch",
@@ -536,6 +626,12 @@
       "test": "TestDryRunChangesZeroBytes",
       "result": "pass",
       "seconds": 0
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestDryRunNeverTurnsSlowAnswersInto504",
+      "result": "pass",
+      "seconds": 0.6
     },
     {
       "package": "internal/patch",
@@ -589,7 +685,7 @@
       "package": "internal/patch",
       "test": "TestNoBodyResponsesAreSkipped",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
     },
     {
       "package": "internal/patch",
@@ -601,13 +697,13 @@
       "package": "internal/patch",
       "test": "TestOddQueryStringsPassThroughExactly",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0.02
     },
     {
       "package": "internal/patch",
       "test": "TestOversizeBodyPassesUnchanged",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
     },
     {
       "package": "internal/patch",
@@ -643,17 +739,23 @@
       "package": "internal/patch",
       "test": "TestRuleOrderIsDeterministic",
       "result": "pass",
-      "seconds": 0.2
+      "seconds": 0.16
     },
     {
       "package": "internal/patch",
       "test": "TestSlowUpstreamGives504",
       "result": "pass",
-      "seconds": 0.31
+      "seconds": 0.3
     },
     {
       "package": "internal/patch",
       "test": "TestStalledBodyGives504",
+      "result": "pass",
+      "seconds": 0.3
+    },
+    {
+      "package": "internal/patch",
+      "test": "TestStalledRequestBodyGets408",
       "result": "pass",
       "seconds": 0.3
     },
@@ -667,7 +769,7 @@
       "package": "internal/patch",
       "test": "TestUnmatchedTrafficIsByteIdentical",
       "result": "pass",
-      "seconds": 1.59
+      "seconds": 1.74
     },
     {
       "package": "internal/patch",
@@ -709,7 +811,7 @@
       "package": "internal/rules",
       "test": "TestLoadErrors",
       "result": "pass",
-      "seconds": 0.01
+      "seconds": 0
     },
     {
       "package": "internal/rules",
@@ -1316,73 +1418,73 @@
     {
       "name": "direct to upstream",
       "requests": 20000,
-      "p50_us": 26.1,
-      "p99_us": 147.8,
-      "mean_us": 37.2,
+      "p50_us": 24.3,
+      "p99_us": 145.4,
+      "mean_us": 35.5,
       "concurrency": 16,
-      "requests_per_second": 44274
+      "requests_per_second": 48174
     },
     {
       "name": "proxy, no rule matches",
       "requests": 20000,
-      "p50_us": 85.8,
-      "p99_us": 713.6,
-      "mean_us": 115,
+      "p50_us": 65.2,
+      "p99_us": 667.9,
+      "mean_us": 103.8,
       "concurrency": 16,
-      "requests_per_second": 11344
+      "requests_per_second": 11946
     },
     {
       "name": "proxy, both example rules applied",
       "requests": 20000,
-      "p50_us": 110.2,
-      "p99_us": 1273,
-      "mean_us": 172.9,
+      "p50_us": 102.1,
+      "p99_us": 1138.4,
+      "mean_us": 159.8,
       "concurrency": 16,
-      "requests_per_second": 9238
+      "requests_per_second": 10113
     },
     {
       "name": "adapt: direct to v2, one customer",
       "requests": 20000,
-      "p50_us": 27.5,
-      "p99_us": 215.3,
-      "mean_us": 41.2,
+      "p50_us": 27.1,
+      "p99_us": 191,
+      "mean_us": 39.8,
       "concurrency": 16,
-      "requests_per_second": 40233
+      "requests_per_second": 39613
     },
     {
       "name": "adapt: v1 lookup rebuilt from v2",
       "requests": 20000,
-      "p50_us": 104.9,
-      "p99_us": 1436.3,
-      "mean_us": 174.1,
+      "p50_us": 94.5,
+      "p99_us": 1317.8,
+      "mean_us": 160.6,
       "concurrency": 16,
-      "requests_per_second": 9868
+      "requests_per_second": 10608
     },
     {
       "name": "adapt: direct to v2, list",
       "requests": 20000,
-      "p50_us": 28.7,
-      "p99_us": 206.5,
-      "mean_us": 42.6,
+      "p50_us": 27.4,
+      "p99_us": 191.1,
+      "mean_us": 41.4,
       "concurrency": 16,
-      "requests_per_second": 39508
+      "requests_per_second": 41215
     },
     {
       "name": "adapt: v1 list rebuilt from v2",
       "requests": 20000,
-      "p50_us": 131.1,
-      "p99_us": 1596.7,
-      "mean_us": 192.3,
+      "p50_us": 109.7,
+      "p99_us": 1646.5,
+      "mean_us": 179.6,
       "concurrency": 16,
-      "requests_per_second": 8087
+      "requests_per_second": 8692
     }
   ],
-  "added_p50_us": 59.7,
-  "added_p99_us": 565.8,
-  "patched_added_p50_us": 84.1,
-  "adapt_lookup_added_p50_us": 77.4,
-  "adapt_lookup_added_p99_us": 1221,
-  "adapt_list_added_p50_us": 102.4,
-  "adapt_list_added_p99_us": 1390.2,
-  "patched_added_p99_us": 1125.2
+  "added_p50_us": 40.9,
+  "added_p99_us": 522.5,
+  "patched_added_p50_us": 77.8,
+  "adapt_lookup_added_p50_us": 67.4,
+  "adapt_lookup_added_p99_us": 1126.8,
+  "adapt_list_added_p50_us": 82.3,
+  "adapt_list_added_p99_us": 1455.4,
+  "patched_added_p99_us": 993
 }

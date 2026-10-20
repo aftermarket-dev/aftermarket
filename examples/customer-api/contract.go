@@ -58,11 +58,10 @@ func Contract(base string) []Check {
 		if err != nil {
 			return err
 		}
-		list, ok := got.([]any)
-		if !ok || len(list) != 2 {
-			return fmt.Errorf("want 2 customers, got %v", got)
-		}
-		return nil
+		return same(got, []any{
+			map[string]any{"customer_id": 7.0, "name": "Ada Lovelace"},
+			map[string]any{"customer_id": 42.0, "name": "Grace Hopper"},
+		})
 	})
 	check("search by name", func() error {
 		got, err := c.call("GET", "/api/v1/customers/search?q=grace", nil, 200)

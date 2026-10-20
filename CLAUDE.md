@@ -74,6 +74,10 @@ AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterli
 - Health check lives at /_aftermarket/healthz (not /healthz) so it never hides an upstream path.
 - Oct 19 2026: 0.1.0 released and verified (all archives, SHA256SUMS, latest links, downloaded binary run as a live proxy). Site published with quick start, download, reference and release posts. Aftermarket added to softdevstudio.com as the twenty-third project.
 
+- Oct 20 2026: 0.2.0 AfterAPI built. Shared plumbing moved into internal/httpx and internal/fixture (patch unchanged). Independent review found no high-severity issue and 10 medium/low ones (audit leak on skipped-then-failed requests, dry run 504 on slow bodies, stalled request bodies, leftover query collisions, header rename overlaps, invalid UTF-8 params, repeated-parameter matching order, explicit headers overridden on rebuild, literal number typing, check not listing every problem) plus test gaps; all fixed with regression tests. Two of them also fixed in patch (dry run, stalled bodies). Version raised to 0.2.0 for the automated release.
+
 ## Next
 
-1. 0.2.0 AfterAPI (`aftermarket adapt`), as approved above.
+1. Confirm the 0.2.0 release (archives, SHA256SUMS, latest links, a downloaded binary running adapt).
+2. Site: AfterAPI reference page, quick start part two, release and testing posts, roadmap and concepts status; a softdevstudio.com note.
+3. 0.3.0 AfterTest and AfterDiff (`record`, `replay`), as planned above. Agree the details with the owner first.

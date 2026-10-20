@@ -4,4 +4,4 @@
 package version
 
 // Version is the Aftermarket version.
-const Version = "0.2.0-dev"
+const Version = "0.2.0"

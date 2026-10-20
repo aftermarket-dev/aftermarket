@@ -55,78 +55,90 @@ type ref struct {
 func (r ref) isBody() bool { return r.param == "" }
 
 // compileTemplate turns a YAML node into a template. params lists the
-// parameters the old URL captures.
+// parameters the old URL captures; nil accepts any name (used when old
+// itself is broken, so its errors aren't followed by false ones). Every
+// problem found is returned.
 func compileTemplate(n *yamlite.Node, params map[string]bool) (*Template, error) {
+	var errs rules.Errors
+	t := compile(n, params, &errs)
+	if len(errs) > 0 {
+		return nil, errs
+	}
+	return t, nil
+}
+
+func lineErr(line int, msg string) error { return &rules.LineError{Line: line, Msg: msg} }
+
+func compile(n *yamlite.Node, params map[string]bool, errs *rules.Errors) *Template {
 	switch n.Kind {
 	case yamlite.Null:
-		return &Template{kind: tLiteral, lit: nil}, nil
+		return &Template{kind: tLiteral, lit: nil}
 	case yamlite.Scalar:
 		if strings.HasPrefix(n.Value, "$") {
 			if strings.HasPrefix(n.Value, "$$") {
-				return &Template{kind: tLiteral, lit: n.Value[1:]}, nil
+				return &Template{kind: tLiteral, lit: n.Value[1:]}
 			}
 			r, err := parseRef(n.Value, params)
 			if err != nil {
-				return nil, &rules.LineError{Line: n.Line, Msg: err.Error()}
+				*errs = append(*errs, lineErr(n.Line, err.Error()))
+				return nil
 			}
-			return &Template{kind: tRef, ref: r}, nil
+			return &Template{kind: tRef, ref: r}
 		}
-		return &Template{kind: tLiteral, lit: rules.NodeToJSON(n)}, nil
+		v := rules.NodeToJSON(n)
+		if err := rules.CheckNumbers(v); err != nil {
+			*errs = append(*errs, lineErr(n.Line, err.Error()))
+		}
+		return &Template{kind: tLiteral, lit: v}
 	case yamlite.Seq:
 		t := &Template{kind: tArray}
 		for _, it := range n.Items {
-			c, err := compileTemplate(it, params)
-			if err != nil {
-				return nil, err
-			}
-			t.items = append(t.items, c)
+			t.items = append(t.items, compile(it, params, errs))
 		}
-		return t, nil
+		return t
 	case yamlite.Map:
 		if n.Get("$each") != nil || n.Get("$item") != nil {
-			return compileEach(n, params)
+			return compileEach(n, params, errs)
 		}
 		t := &Template{kind: tObject}
 		for _, p := range n.Pairs {
 			key := p.Key
 			if strings.HasPrefix(key, "$") {
 				if !strings.HasPrefix(key, "$$") {
-					return nil, &rules.LineError{Line: p.KeyLine, Msg: fmt.Sprintf("key %q starts with $; write $$ for a literal $, or use $each with $item to build a list", key)}
+					*errs = append(*errs, lineErr(p.KeyLine, fmt.Sprintf("key %q starts with $; write $$ for a literal $, or use $each with $item to build a list", key)))
+					continue
 				}
 				key = key[1:]
 			}
-			c, err := compileTemplate(p.Value, params)
-			if err != nil {
-				return nil, err
-			}
 			t.keys = append(t.keys, key)
-			t.vals = append(t.vals, c)
+			t.vals = append(t.vals, compile(p.Value, params, errs))
 		}
-		return t, nil
+		return t
 	}
-	return nil, &rules.LineError{Line: n.Line, Msg: "unsupported template value"}
+	*errs = append(*errs, lineErr(n.Line, "unsupported template value"))
+	return nil
 }
 
-func compileEach(n *yamlite.Node, params map[string]bool) (*Template, error) {
+func compileEach(n *yamlite.Node, params map[string]bool, errs *rules.Errors) *Template {
 	if len(n.Pairs) != 2 || n.Get("$each") == nil || n.Get("$item") == nil {
-		return nil, &rules.LineError{Line: n.Line, Msg: "a list template needs exactly two keys, $each and $item"}
+		*errs = append(*errs, lineErr(n.Line, "a list template needs exactly two keys, $each and $item"))
+		return nil
 	}
 	src := n.Get("$each")
 	if src.Kind != yamlite.Scalar {
-		return nil, &rules.LineError{Line: src.Line, Msg: "$each must point at a list, such as $.items"}
+		*errs = append(*errs, lineErr(src.Line, "$each must point at a list, such as $.items"))
+		return nil
 	}
 	r, err := parseRef(src.Value, params)
 	if err != nil {
-		return nil, &rules.LineError{Line: src.Line, Msg: err.Error()}
+		*errs = append(*errs, lineErr(src.Line, err.Error()))
+		return nil
 	}
 	if !r.isBody() {
-		return nil, &rules.LineError{Line: src.Line, Msg: "$each must point at a list in the body, such as $.items"}
+		*errs = append(*errs, lineErr(src.Line, "$each must point at a list in the body, such as $.items"))
+		return nil
 	}
-	item, err := compileTemplate(n.Get("$item"), params)
-	if err != nil {
-		return nil, err
-	}
-	return &Template{kind: tEach, each: r, item: item}, nil
+	return &Template{kind: tEach, each: r, item: compile(n.Get("$item"), params, errs)}
 }
 
 func parseRef(s string, params map[string]bool) (ref, error) {
@@ -135,7 +147,7 @@ func parseRef(s string, params map[string]bool) (ref, error) {
 		return ref{whole: true, text: s}, nil
 	case strings.HasPrefix(s, "$params."):
 		name := strings.TrimPrefix(s, "$params.")
-		if !params[name] {
+		if params != nil && !params[name] {
 			var known []string
 			for k := range params {
 				known = append(known, k)

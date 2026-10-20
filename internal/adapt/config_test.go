@@ -151,9 +151,10 @@ func TestLeftoverQuery(t *testing.T) {
 		"id=7&limit=2":           "limit=2",
 		"x=1;y=2&id=7&z":         "x=1;y=2&z",
 		"a+b=1&a%20b=2&keep=%zz": "keep=%zz",
+		"page=9&id=1&x=2":        "x=2",
 	}
 	for in, want := range cases {
-		if got := leftoverQuery(in, caps); got != want {
+		if got := leftoverQuery(in, caps, []string{"page"}); got != want {
 			t.Errorf("leftoverQuery(%q) = %q, want %q", in, got, want)
 		}
 	}

@@ -5,6 +5,7 @@
 package adapt
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/textproto"
@@ -37,6 +38,7 @@ type Endpoint struct {
 	Headers     []rules.KV // extra request header conditions (globs)
 	Request     RequestMap
 	Response    ResponseMap
+	lenient     bool // old failed to parse; only used while loading
 }
 
 // OldPattern matches requests to the old endpoint and captures parameters.
@@ -124,9 +126,27 @@ func (l *loader) errf(line int, format string, args ...any) {
 }
 
 func (l *loader) add(err error) {
-	if err != nil {
-		l.errs = append(l.errs, err)
+	if err == nil {
+		return
 	}
+	var many rules.Errors
+	if errors.As(err, &many) {
+		l.errs = append(l.errs, many...)
+		return
+	}
+	l.errs = append(l.errs, err)
+}
+
+func errLine(err error) int {
+	var le *rules.LineError
+	if errors.As(err, &le) {
+		return le.Line
+	}
+	var ye *yamlite.Error
+	if errors.As(err, &ye) {
+		return ye.Line
+	}
+	return 0
 }
 
 func (l *loader) onlyKeys(n *yamlite.Node, allowed ...string) {
@@ -195,6 +215,7 @@ func Load(data []byte) (*Config, error) {
 		}
 	}
 	if len(l.errs) > 0 {
+		sort.SliceStable(l.errs, func(i, j int) bool { return errLine(l.errs[i]) < errLine(l.errs[j]) })
 		return nil, l.errs
 	}
 	return cfg, nil
@@ -256,23 +277,30 @@ func (l *loader) endpoint(n *yamlite.Node) *Endpoint {
 		l.errf(n.Line, "endpoint %q needs both old and new, such as old: GET /api/v1/customer?id={id}", e.ID)
 		return nil
 	}
+	oldOK := false
 	if s, ok := l.scalar(oldN, "old"); ok {
 		op, err := parseOld(s)
 		if err != nil {
 			l.errf(oldN.Line, "old: %v", err)
+		} else {
+			oldOK = true
 		}
 		e.Old = op
 	}
-	if s, ok := l.scalar(newN, "new"); ok && e.Old.Params != nil {
-		np, err := parseNew(s, e.Old.Params)
+	// When old is broken, the rest is still checked, but without judging
+	// which parameters exist, so its errors aren't followed by false ones.
+	params := e.Old.Params
+	if !oldOK {
+		params = nil
+	}
+	if s, ok := l.scalar(newN, "new"); ok {
+		np, err := parseNew(s, params)
 		if err != nil {
 			l.errf(newN.Line, "new: %v", err)
 		}
 		e.New = np
 	}
-	if len(l.errs) > before {
-		return nil
-	}
+	e.Old.Params, e.lenient = params, !oldOK
 	if w := n.Get("when"); w != nil {
 		l.when(w, e)
 	}
@@ -457,6 +485,24 @@ func (l *loader) headers(n *yamlite.Node, what string) HeaderMap {
 			}
 		}
 	}
+	seen := map[string]string{}
+	use := func(name, how string) {
+		if prev, ok := seen[name]; ok {
+			l.errf(n.Line, "%s: %s is used by both %s and %s; each header may appear once", what, name, prev, how)
+			return
+		}
+		seen[name] = how
+	}
+	for _, rn := range h.Rename {
+		use(rn[0], "rename")
+		use(rn[1], "rename")
+	}
+	for _, kv := range h.Set {
+		use(kv.Name, "set")
+	}
+	for _, name := range h.Remove {
+		use(name, "remove")
+	}
 	return h
 }
 
@@ -598,7 +644,7 @@ func splitParts(s string, params map[string]bool, inQuery bool) ([]part, error) 
 			break
 		}
 		name := rest[loc[2]:loc[3]]
-		if !params[name] {
+		if params != nil && !params[name] {
 			return nil, fmt.Errorf("{%s} is not captured by old", name)
 		}
 		parts = append(parts, part{param: name})
@@ -662,15 +708,22 @@ func (e *Endpoint) match(method string, segs []string, query url.Values, h http.
 			return nil, false, ""
 		}
 	}
+	repeated := ""
 	for _, q := range e.Old.Query {
 		vals := query[q.key]
-		if len(vals) == 0 || vals[0] == "" {
+		if len(vals) == 0 {
+			return nil, false, ""
+		}
+		if len(vals) > 1 {
+			if repeated == "" {
+				repeated = q.key
+			}
+			continue
+		}
+		if vals[0] == "" {
 			return nil, false, ""
 		}
 		params[q.param] = vals[0]
-		if len(vals) > 1 {
-			return params, true, "query parameter " + q.key + " appears more than once"
-		}
 	}
 	for _, kv := range e.Headers {
 		vals := h.Values(kv.Name)
@@ -684,6 +737,9 @@ func (e *Endpoint) match(method string, segs []string, query url.Values, h http.
 			return nil, false, ""
 		}
 	}
+	if repeated != "" {
+		return params, true, "query parameter " + repeated + " appears more than once"
+	}
 	// Values that go into the new path must stay inside one segment.
 	for _, p := range e.New.Path {
 		if p.param != "" && !safeSegment(params[p.param]) {
@@ -695,6 +751,17 @@ func (e *Endpoint) match(method string, segs []string, query url.Values, h http.
 
 func safeSegment(v string) bool {
 	return v != "" && v != "." && v != ".." && !strings.ContainsAny(v, "/\\")
+}
+
+// queryKeys returns the decoded keys the new query string sets.
+func (np NewPattern) queryKeys() []string {
+	var out []string
+	for _, q := range np.Query {
+		if k, err := url.QueryUnescape(q.key); err == nil {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // render builds the escaped path and the query string of the new request.

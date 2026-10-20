@@ -8,7 +8,7 @@ import (
 	"github.com/aftermarket-dev/aftermarket/internal/yamlite"
 )
 
-func compile(t *testing.T, src string, params ...string) *Template {
+func compileT(t *testing.T, src string, params ...string) *Template {
 	t.Helper()
 	n, err := yamlite.Parse([]byte(src))
 	if err != nil {
@@ -46,7 +46,7 @@ func build(t *testing.T, tpl *Template, doc string, params map[string]string) (s
 }
 
 func TestTemplateObject(t *testing.T) {
-	tpl := compile(t, `
+	tpl := compileT(t, `
 customer_id: $.customer.id
 name: $.customer.full_name
 first_tag: $.tags.0
@@ -71,7 +71,7 @@ whole: $.customer
 }
 
 func TestTemplateMissingFieldsAreLeftOut(t *testing.T) {
-	tpl := compile(t, "a: $.x\nb: $.y.z\nc: [$.x, $.nope]\n")
+	tpl := compileT(t, "a: $.x\nb: $.y.z\nc: [$.x, $.nope]\n")
 	got, missing := build(t, tpl, `{"x":1}`, nil)
 	if got != `{"a":1,"c":[1,null]}` {
 		t.Fatalf("got %s", got)
@@ -82,7 +82,7 @@ func TestTemplateMissingFieldsAreLeftOut(t *testing.T) {
 }
 
 func TestTemplateEach(t *testing.T) {
-	tpl := compile(t, `
+	tpl := compileT(t, `
 items:
   $each: $.data
   $item:
@@ -100,7 +100,7 @@ total: $.count
 	if strings.Join(missing, ",") != "id not found" {
 		t.Fatalf("missing = %v", missing)
 	}
-	top := compile(t, "$each: $\n$item: $.n\n")
+	top := compileT(t, "$each: $\n$item: $.n\n")
 	if got, _ := build(t, top, `[{"n":1},{"n":2}]`, nil); got != "[1,2]" {
 		t.Fatalf("top-level each = %s", got)
 	}
@@ -113,7 +113,7 @@ func TestTemplateCannotBeBuilt(t *testing.T) {
 		"$each: $\n$item: 1\n":      `{"a":1}`,
 	}
 	for src, doc := range cases {
-		tpl := compile(t, src)
+		tpl := compileT(t, src)
 		d, _ := ojson.Decode([]byte(doc))
 		if _, _, err := tpl.Build(d, nil); err == nil {
 			t.Errorf("%q on %s should fail", src, doc)
@@ -132,7 +132,7 @@ func TestTemplateCannotBeBuilt(t *testing.T) {
 }
 
 func TestTemplateWithoutBody(t *testing.T) {
-	tpl := compile(t, "deleted: true\nid: $params.id\n", "id")
+	tpl := compileT(t, "deleted: true\nid: $params.id\n", "id")
 	if tpl.usesBody() {
 		t.Fatal("usesBody should be false")
 	}
@@ -151,7 +151,7 @@ func TestMissingListIsDeduplicated(t *testing.T) {
 		doc.WriteString(`{}`)
 	}
 	doc.WriteString(`]}`)
-	tpl := compile(t, "$each: $.d\n$item: {a: $.a, b: $.b}\n")
+	tpl := compileT(t, "$each: $.d\n$item: {a: $.a, b: $.b}\n")
 	_, missing := build(t, tpl, doc.String(), nil)
 	if len(missing) != 2 {
 		t.Fatalf("missing = %v", missing)

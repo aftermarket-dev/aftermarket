@@ -75,12 +75,26 @@ func TestUnmatchedTrafficIsByteIdentical(t *testing.T) {
 		w.Header().Set("X-Api-Version", "2")
 		body := make([]byte, rs.Intn(30000))
 		rs.Read(body)
-		if status != 204 && status != 304 {
+		if r.URL.Query().Get("gz") == "1" {
+			w.Header().Set("Content-Encoding", "gzip")
+			body = tk.Gzip(body)
+		}
+		chunked := r.URL.Query().Get("chunked") == "1"
+		if status != 204 && status != 304 && !chunked {
 			w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		}
 		w.WriteHeader(status)
-		if status != 204 && status != 304 && r.Method != http.MethodHead {
+		if status == 204 || status == 304 || r.Method == http.MethodHead {
+			return
+		}
+		if !chunked {
 			w.Write(body)
+			return
+		}
+		for i := 0; i < len(body); i += 997 {
+			end := min(i+997, len(body))
+			w.Write(body[i:end])
+			w.(http.Flusher).Flush()
 		}
 	}))
 	defer up.Close()
@@ -115,6 +129,17 @@ func TestUnmatchedTrafficIsByteIdentical(t *testing.T) {
 			if rs.Intn(2) == 0 {
 				uri += fmt.Sprintf("?k%d=%d&q=x%%20y", rs.Intn(3), rs.Intn(100))
 			}
+			sep := "?"
+			if strings.Contains(uri, "?") {
+				sep = "&"
+			}
+			if rs.Intn(4) == 0 {
+				uri += sep + "gz=1"
+				sep = "&"
+			}
+			if rs.Intn(4) == 0 {
+				uri += sep + "chunked=1"
+			}
 		}
 		hdr := http.Header{"User-Agent": {"aftermarket-test"}, "X-Rand": {strconv.Itoa(rs.Intn(1000))}}
 		var body []byte
@@ -123,9 +148,13 @@ func TestUnmatchedTrafficIsByteIdentical(t *testing.T) {
 			body = make([]byte, rs.Intn(40000))
 			rs.Read(body)
 		}
-		direct := tk.Do(t, method, up.URL+uri, hdr, body)
+		send := tk.Do
+		if body != nil && rs.Intn(3) == 0 {
+			send = tk.DoChunked // a request body of unknown length
+		}
+		direct := send(t, method, up.URL+uri, hdr, body)
 		dReq := rec.Last()
-		proxied := tk.Do(t, method, h.url+uri, hdr, body)
+		proxied := send(t, method, h.url+uri, hdr, body)
 		pReq := rec.Last()
 		ctx := fmt.Sprintf("case %d: %s %s", i, method, uri)
 		if dReq.Method != pReq.Method || dReq.URI != pReq.URI || !bytes.Equal(dReq.Body, pReq.Body) {
