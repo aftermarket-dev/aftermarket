@@ -978,3 +978,28 @@ func CheckNumbers(v any) error {
 	}
 	return nil
 }
+
+// ParseWhen reads a `when:` block for another tool, with the same rules and
+// messages as in a rule file.
+func ParseWhen(n *yamlite.Node) (When, Errors) {
+	l := &loader{}
+	var w When
+	l.when(n, &w)
+	return w, l.errs
+}
+
+// ParseLimits reads a `limits:` block into maxBody and timeout, which hold
+// the defaults on the way in.
+func ParseLimits(n *yamlite.Node, maxBody *int64, timeout *time.Duration) Errors {
+	l := &loader{}
+	cfg := &Config{MaxBody: *maxBody, UpstreamTimeout: *timeout}
+	l.limits(n, cfg)
+	*maxBody, *timeout = cfg.MaxBody, cfg.UpstreamTimeout
+	return l.errs
+}
+
+// Empty reports whether w has no conditions, so it matches everything.
+func (w *When) Empty() bool {
+	return len(w.Methods) == 0 && w.PathGlob == "" && len(w.Query) == 0 && len(w.Headers) == 0 &&
+		len(w.Statuses) == 0 && w.ContentType == ""
+}

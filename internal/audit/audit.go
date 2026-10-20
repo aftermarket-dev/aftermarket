@@ -22,6 +22,7 @@ const (
 	Skipped       = "skipped"        // the rule matched but could not be applied safely
 	Unchanged     = "unchanged"      // the rule matched but nothing needed changing
 	UpstreamError = "upstream_error" // the upstream failed; the proxy answered itself
+	Recorded      = "recorded"       // record: the exchange was written to the fixture file
 )
 
 // Event is one audit record.

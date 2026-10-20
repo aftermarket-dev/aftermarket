@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,5 +130,89 @@ func TestAdaptRunNeedsUpstream(t *testing.T) {
 	}
 	if code, _, _ := runCLI("adapt", "nope"); code != 2 {
 		t.Fatal("unknown adapt command should exit 2")
+	}
+}
+
+func TestRecordCheck(t *testing.T) {
+	code, out, errs := runCLI("record", "check", "--config", "../../examples/customer-api/record.yaml")
+	if code != 0 || !strings.Contains(out, "redacts headers: Authorization, Cookie, Proxy-Authorization, Set-Cookie, X-Api-Key, X-Request-Token") ||
+		!strings.Contains(out, "redacts JSON fields: email, customer.email, data.*.email") || !strings.HasSuffix(out, "ok\n") {
+		t.Fatalf("check: %d %q %q", code, out, errs)
+	}
+	bad := filepath.Join(t.TempDir(), "bad.yaml")
+	os.WriteFile(bad, []byte("redact: {json: [a..b]}\nmax_cases: -1\n"), 0o600)
+	if code, _, errs := runCLI("record", "check", "--config", bad); code != 1 || !strings.Contains(errs, "line 1:") || !strings.Contains(errs, "line 2: max_cases") {
+		t.Fatalf("bad: %d %q", code, errs)
+	}
+	if code, _, _ := runCLI("record", "check"); code != 2 {
+		t.Fatal("check without --config should exit 2")
+	}
+}
+
+func TestRecordNeverOverwrites(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "f.yaml")
+	os.WriteFile(out, []byte("keep me"), 0o600)
+	code, _, errs := runCLI("record", "--upstream", "http://127.0.0.1:1", "--out", out, "--listen", "127.0.0.1:0")
+	if code != 1 || !strings.Contains(errs, "already exists") {
+		t.Fatalf("%d %q", code, errs)
+	}
+	if b, _ := os.ReadFile(out); string(b) != "keep me" {
+		t.Fatal("the existing file was changed")
+	}
+	if code, _, _ := runCLI("record", "--upstream", "http://x"); code != 2 {
+		t.Fatal("record without --out should exit 2")
+	}
+	missing := filepath.Join(t.TempDir(), "new.yaml")
+	if code, _, _ := runCLI("record", "--upstream", "ftp://x", "--out", missing); code != 2 {
+		t.Fatal("a bad upstream should exit 2")
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Fatal("a fixture file was left behind after a bad upstream")
+	}
+}
+
+func TestReplayCLI(t *testing.T) {
+	a := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"v":1,"at":"x"}`)
+	}))
+	defer a.Close()
+	b := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"at":"y","v":1.0}`)
+	}))
+	defer b.Close()
+	dir := t.TempDir()
+	fx := filepath.Join(dir, "f.yaml")
+	os.WriteFile(fx, []byte("cases:\n  - name: one\n    request: {path: /x}\n    expect:\n      response: {status: 200}\n"), 0o600)
+
+	code, out, _ := runCLI("replay", "--fixture", fx, "--a", a.URL, "--b", b.URL)
+	if code != 1 || !strings.Contains(out, `- at: "x" vs "y"`) {
+		t.Fatalf("different: %d %q", code, out)
+	}
+	md, js := filepath.Join(dir, "r.md"), filepath.Join(dir, "r.json")
+	code, out, _ = runCLI("replay", "--fixture", fx, "--a", a.URL, "--b", b.URL, "--ignore", "at", "--report", md, "--json", js)
+	if code != 0 || out != "1 case(s): 1 same, 0 different, 0 skipped, 0 error(s)\n" {
+		t.Fatalf("ignored: %d %q", code, out)
+	}
+	if m, _ := os.ReadFile(md); !strings.Contains(string(m), "- Ignored: at") {
+		t.Fatalf("markdown: %s", m)
+	}
+	if j, _ := os.ReadFile(js); !strings.Contains(string(j), `"same": 1`) {
+		t.Fatalf("json: %s", j)
+	}
+	for _, args := range [][]string{
+		{"replay", "--a", a.URL},
+		{"replay", "--fixture", fx},
+		{"replay", "--fixture", fx, "--a", a.URL, "--ignore", "a..b"},
+		{"replay", "--fixture", fx, "--a", a.URL, "--set-header", "no colon"},
+		{"replay", "--fixture", fx, "--a", "ftp://x"},
+	} {
+		if code, _, _ := runCLI(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	if code, _, _ := runCLI("replay", "--fixture", filepath.Join(dir, "none.yaml"), "--a", a.URL); code != 1 {
+		t.Error("a missing fixture should exit 1")
 	}
 }

@@ -60,8 +60,14 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - Out of scope: fan-out (one old call needing several new calls); kept for later.
 - `adapt` stays a subcommand of the same binary; split it out only if the code shows a real reason.
 
-### 0.3.0 AfterTest and AfterDiff
+### 0.3.0 AfterTest and AfterDiff (details left to Claude by the owner, Oct 20 2026)
 `aftermarket record` captures traffic through the proxy into redacted fixtures. `aftermarket replay` sends fixtures to two upstreams and writes a semantic diff report.
+- record is a pass-through proxy (changes zero bytes, streams) that writes each finished exchange as a case in the existing fixture format, so recordings run with `patch test` and `adapt test`.
+- Optional record config: the shared `when:` block picks traffic; `redact:` lists extra headers, query keys and JSON dot paths (`*` for any element). Credential headers are always redacted. Redacted values read `REDACTED`.
+- Exchanges that can't be stored safely (bodies over max_body, not valid UTF-8, compression other than gzip, JSON that can't be redacted, cut off) pass through and are logged as skipped.
+- replay sends each case to two upstreams (or one, compared with the recorded response). Only GET and HEAD by default; `--include-writes` for the rest.
+- Comparison: status, chosen headers (Content-Type by default), JSON bodies by meaning (key order and number formatting ignored, `--ignore` dot paths), other bodies byte for byte. Markdown and JSON reports; exit 1 on any difference.
+- Promise tests: recording changes zero bytes; no credential or listed value reaches a fixture; the customer-api suite recorded against v1 replays with no difference against v2 through adapt, and with differences against v2 directly.
 
 ### Later, decided with the owner at the time
 AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.

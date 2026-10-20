@@ -233,3 +233,10 @@ func DoChunked(t testing.TB, method, u string, h http.Header, body []byte) Respo
 	b, _ := io.ReadAll(resp.Body)
 	return Response{Status: resp.StatusCode, Header: resp.Header, Body: b}
 }
+
+// All returns every recorded request, oldest first.
+func (rc *Recorder) All() []Recorded {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	return append([]Recorded(nil), rc.reqs...)
+}

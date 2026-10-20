@@ -1,0 +1,21 @@
+# Record config for `aftermarket record`. It's optional: without it, record
+# saves all traffic and blanks credential headers (Authorization,
+# Proxy-Authorization, Cookie, Set-Cookie, X-Api-Key).
+version: 1
+
+# Which traffic to save. Same conditions as a patch rule's when: block.
+when:
+  path: /api/**
+
+# Values to blank as REDACTED in the fixture file, on top of credentials.
+# The traffic itself is never changed.
+redact:
+  headers: [X-Request-Token]
+  query: [api_key]
+  json: [email, customer.email, data.*.email]
+
+limits:
+  max_body: 1MiB
+  upstream_timeout: 30s
+
+max_cases: 1000

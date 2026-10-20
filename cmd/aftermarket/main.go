@@ -36,10 +36,16 @@ Usage:
   aftermarket adapt check --config adapt.yaml
   aftermarket adapt test  --config adapt.yaml --fixture fixture.yaml
 
+  aftermarket record --upstream URL --out fixture.yaml [--config record.yaml] [--listen ADDR]
+  aftermarket record check --config record.yaml
+  aftermarket replay --fixture fixture.yaml --a URL [--b URL] [--include-writes]
+
   aftermarket version
 
 patch fixes requests and responses with small rules. adapt maps old API
-endpoints onto new ones. Run "aftermarket <tool> <command> -h" for options.
+endpoints onto new ones. record saves real traffic as fixtures, with
+credentials removed, and replay sends them to two versions of a service and
+reports the differences. Add -h to any command for its options.
 Manual: https://github.com/aftermarket-dev/aftermarket
 `
 
@@ -63,6 +69,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runTool(patchTool, args[1:], stdout, stderr)
 	case "adapt":
 		return runTool(adaptTool, args[1:], stdout, stderr)
+	case "record":
+		return runRecord(args[1:], stdout, stderr)
+	case "replay":
+		return runReplay(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "aftermarket: unknown command %q\n\n%s", args[0], usage)
 	return 2
@@ -272,36 +282,52 @@ func toolRun(t tool, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "aftermarket: bad --upstream: %v\n", err)
 		return 2
 	}
-	var log *audit.Log
-	switch *auditPath {
-	case "":
-	case "-":
-		log = audit.New(stderr)
-	default:
-		f, err := os.OpenFile(*auditPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			fmt.Fprintf(stderr, "aftermarket: %v\n", err)
-			return 1
-		}
-		defer f.Close()
-		log = audit.New(f)
+	log, closeLog, err := openAudit(*auditPath, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "aftermarket: %v\n", err)
+		return 1
 	}
+	defer closeLog()
 	h, err := l.handler(u, *dryRun, log, *health)
 	if err != nil {
 		fmt.Fprintf(stderr, "aftermarket: %v\n", err)
 		return 2
 	}
-	ln, err := net.Listen("tcp", *listen)
+	mode := ""
+	if *dryRun {
+		mode = " (dry run: traffic is not changed)"
+	}
+	return serve(*listen, h, stdout, stderr, func(addr string) string {
+		return fmt.Sprintf("aftermarket %s %s: http://%s -> %s, %d %s%s", t.name, version.Version, addr, u, l.count, l.unit, mode)
+	}, func() string { return fmt.Sprintf("aftermarket %s: stopped", t.name) })
+}
+
+// openAudit opens the audit log: "" turns it off, "-" is stderr, anything
+// else is a file appended to.
+func openAudit(path string, stderr io.Writer) (*audit.Log, func(), error) {
+	switch path {
+	case "":
+		return nil, func() {}, nil
+	case "-":
+		return audit.New(stderr), func() {}, nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, nil, err
+	}
+	return audit.New(f), func() { f.Close() }, nil
+}
+
+// serve runs h until interrupted. started and stopped give the lines printed
+// when the server starts (with its address) and after it stops.
+func serve(listen string, h http.Handler, stdout, stderr io.Writer, started func(addr string) string, stopped func() string) int {
+	ln, err := net.Listen("tcp", listen)
 	if err != nil {
 		fmt.Fprintf(stderr, "aftermarket: %v\n", err)
 		return 1
 	}
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
-	mode := ""
-	if *dryRun {
-		mode = " (dry run: traffic is not changed)"
-	}
-	fmt.Fprintf(stdout, "aftermarket %s %s: http://%s -> %s, %d %s%s\n", t.name, version.Version, ln.Addr(), u, l.count, l.unit, mode)
+	fmt.Fprintln(stdout, started(ln.Addr().String()))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -316,6 +342,6 @@ func toolRun(t tool, args []string, stdout, stderr io.Writer) int {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
-	fmt.Fprintf(stdout, "aftermarket %s: stopped\n", t.name)
+	fmt.Fprintln(stdout, stopped())
 	return 0
 }
