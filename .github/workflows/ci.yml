@@ -25,7 +25,14 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test (race detector on)
-        run: go test -race -count=1 ./...
+        shell: bash
+        run: |
+          set +e
+          go test -race -count=1 ./... 2>&1 | tee test.log
+          status=${PIPESTATUS[0]}
+          # Failures also go to annotations, which can be read without the log.
+          grep -E -- '--- FAIL|^FAIL|panic:|_test.go:[0-9]+:|seed [0-9]+' test.log | head -40 | sed 's/^/::error::/'
+          exit $status
       - name: Example fixtures
         run: |
           go run ./cmd/aftermarket patch test --config examples/legacy-customer/rules.yaml --fixture examples/legacy-customer/fixture.yaml
