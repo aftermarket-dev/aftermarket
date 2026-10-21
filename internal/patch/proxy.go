@@ -90,7 +90,6 @@ func (p *Proxy) eventKind() string {
 
 // ServeHTTP handles one request.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	httpx.KeepRequestBody(w)
 	if p.opts.HealthPath != "" && r.URL.Path == p.opts.HealthPath {
 		httpx.WriteHealth(w)
 		return
@@ -138,6 +137,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 	ctx := context.WithValue(r.Context(), ctxKey{}, st)
+	httpx.KeepRequestBody(w)
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }
 

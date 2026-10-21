@@ -149,6 +149,7 @@ func (g *Guard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if g.cfg.APIKeyQuery != "" && !g.cfg.KeepCredential {
 			st.strip = []string{g.cfg.APIKeyQuery}
 		}
+		httpx.KeepRequestBody(w)
 		g.rp.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), stateKey{}, st)))
 		return
 	}

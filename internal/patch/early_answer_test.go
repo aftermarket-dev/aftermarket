@@ -32,3 +32,10 @@ func TestEarlyAnswerIsNotCutOff(t *testing.T) {
 		srv.Close()
 	}
 }
+
+// A health check with a body answers itself and must keep the connection
+// usable.
+func TestHealthCheckWithBody(t *testing.T) {
+	h := startProxy(t, neverMatches, "http://upstream.invalid", false)
+	tk.CheckHealthWithBody(t, h.proxyURL, DefaultHealthPath)
+}

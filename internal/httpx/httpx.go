@@ -348,17 +348,18 @@ func BufferRequestBody(w http.ResponseWriter, r *http.Request, max int64, d time
 	rc := http.NewResponseController(w)
 	deadlineSet := rc.SetReadDeadline(time.Now().Add(d)) == nil
 	br, err := ReadBody(r.Body, max)
+	var ne net.Error
+	if err != nil && !errors.Is(err, ErrTooLarge) && errors.As(err, &ne) && ne.Timeout() {
+		// The deadline stays: the server's last read of the stalled body,
+		// after the 408, then gives up at once instead of waiting on the
+		// client for good.
+		return ErrRequestBodyTimeout
+	}
 	if deadlineSet {
 		_ = rc.SetReadDeadline(time.Time{})
 	}
-	var ne net.Error
-	if err != nil && !errors.Is(err, ErrTooLarge) {
-		if errors.As(err, &ne) && ne.Timeout() {
-			return ErrRequestBodyTimeout
-		}
-		// Any other read error: forward what arrived and let the upstream
-		// see the same broken body the proxy saw.
-	}
+	// On any other read error, what arrived is forwarded, so the upstream
+	// sees the same broken body the proxy saw.
 	r.Body = br.Restore()
 	return nil
 }
@@ -388,6 +389,12 @@ func SafeURL(u *url.URL) string {
 // transport counts the request as failed and drops the upstream connection
 // in the middle of the answer. With the body left alone, the server still
 // finishes it once the handler returns.
+//
+// Call it only right before handing the request to the reverse proxy,
+// which closes the body before it returns. A handler that answers by itself
+// without reading the body (a health check, a denial) must not call it:
+// the server would then finish the body after its background read started,
+// and drop the connection with a logged panic.
 func KeepRequestBody(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).EnableFullDuplex()
 }

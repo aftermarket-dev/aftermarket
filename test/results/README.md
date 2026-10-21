@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.7.0
-- Recorded: 2026-10-21T16:25:11Z
+- Version: 0.7.1
+- Recorded: 2026-10-21T17:54:51Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-444 of 444 tests passed (race detector on).
+452 of 452 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -54,10 +54,12 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/adapt | TestDryRunChangesZeroBytes | pass |
 | internal/adapt | TestDryRunCoversEveryKindOfChange | pass |
 | internal/adapt | TestDryRunNeverTurnsSlowAnswersInto504 | pass |
+| internal/adapt | TestEarlyAnswerIsNotCutOff | pass |
 | internal/adapt | TestExplicitHeadersWinOverRebuildDefaults | pass |
 | internal/adapt | TestGzipResponseIsRebuiltAndRecompressed | pass |
 | internal/adapt | TestHeaderMapOverlapsAreRejected | pass |
 | internal/adapt | TestHeadersRenameAndCredentialsPassUntouched | pass |
+| internal/adapt | TestHealthCheckWithBody | pass |
 | internal/adapt | TestHealthPath | pass |
 | internal/adapt | TestHugeNumbersAreRejected | pass |
 | internal/adapt | TestInvalidUTF8ParameterIsSkipped | pass |
@@ -148,10 +150,12 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/guard | TestDangerousConfigs | pass |
 | internal/guard | TestDeniedRequestsNeverReachTheApp | pass |
 | internal/guard | TestDryRunForwardsAndLogs | pass |
+| internal/guard | TestEarlyAnswerIsNotCutOff | pass |
 | internal/guard | TestEvictionResetsNoLimit | pass |
 | internal/guard | TestFixtureRuns | pass |
 | internal/guard | TestH2CNeverTunnelsPastTheRules | pass |
 | internal/guard | TestHTTP10WithTransferEncoding | pass |
+| internal/guard | TestHealthCheckWithBody | pass |
 | internal/guard | TestHealthUpstreamErrorsAndConnections | pass |
 | internal/guard | TestIgnoreCaseRejectsNonASCIIPaths | pass |
 | internal/guard | TestKeepCredentials | pass |
@@ -222,9 +226,11 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/patch | TestConnectionListedHeadersAreDroppedWhenARuleMatches | pass |
 | internal/patch | TestDryRunChangesZeroBytes | pass |
 | internal/patch | TestDryRunNeverTurnsSlowAnswersInto504 | pass |
+| internal/patch | TestEarlyAnswerIsNotCutOff | pass |
 | internal/patch | TestForwardingHeadersCanBeChanged | pass |
 | internal/patch | TestGzipContentLengthIsCorrected | pass |
 | internal/patch | TestGzipResponseIsPatchedAndRecompressed | pass |
+| internal/patch | TestHealthCheckWithBody | pass |
 | internal/patch | TestHealthPath | pass |
 | internal/patch | TestMalformedJSONPassesUnchanged | pass |
 | internal/patch | TestMalformedRequestBodyPassesUnchanged | pass |
@@ -253,8 +259,10 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/record | TestAuditIDsAndMaxCases | pass |
 | internal/record | TestConcurrentRecording | pass |
 | internal/record | TestConfigErrorsAreAllReportedInLineOrder | pass |
+| internal/record | TestEarlyAnswerIsNotCutOff | pass |
 | internal/record | TestGzipBodiesAreStoredDecoded | pass |
 | internal/record | TestHeadersThatArentTextAreSkipped | pass |
+| internal/record | TestHealthCheckWithBody | pass |
 | internal/record | TestHealthPath | pass |
 | internal/record | TestJSONIsRedactedWhateverTheContentType | pass |
 | internal/record | TestQueryRedactionCoversEverySeparator | pass |
@@ -302,17 +310,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 49.2 µs | 276.0 µs | 28048 |
-| proxy, no rule matches | 164.9 µs | 1232.2 µs | 6072 |
-| proxy, both example rules applied | 213.9 µs | 1942.4 µs | 4562 |
-| adapt: direct to v2, one customer | 56.2 µs | 376.2 µs | 21333 |
-| adapt: v1 lookup rebuilt from v2 | 231.7 µs | 2428.6 µs | 4653 |
-| adapt: direct to v2, list | 74.4 µs | 452.4 µs | 19938 |
-| adapt: v1 list rebuilt from v2 | 293.2 µs | 2563.7 µs | 5451 |
-| record: v2 lookup saved to a fixture | 233.5 µs | 1701.2 µs | 4721 |
+| direct to upstream | 42.8 µs | 292.3 µs | 25131 |
+| proxy, no rule matches | 184.8 µs | 1311.6 µs | 4937 |
+| proxy, both example rules applied | 240.9 µs | 2359.4 µs | 5295 |
+| adapt: direct to v2, one customer | 48.1 µs | 342.0 µs | 22355 |
+| adapt: v1 lookup rebuilt from v2 | 205.8 µs | 2250.0 µs | 6012 |
+| adapt: direct to v2, list | 52.5 µs | 367.4 µs | 23050 |
+| adapt: v1 list rebuilt from v2 | 229.2 µs | 2351.1 µs | 4710 |
+| record: v2 lookup saved to a fixture | 191.5 µs | 1608.1 µs | 6956 |
 
-Added by the proxy when no rule matches: 115.7 µs at p50, 956.2 µs at p99.
-Added by the proxy with both example rules applied: 164.7 µs at p50, 1666.4 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 175.5 µs at p50, 2052.4 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 218.8 µs at p50, 2111.3 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 177.3 µs at p50, 1325.0 µs at p99.
+Added by the proxy when no rule matches: 142.0 µs at p50, 1019.3 µs at p99.
+Added by the proxy with both example rules applied: 198.1 µs at p50, 2067.1 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 157.7 µs at p50, 1908.0 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 176.7 µs at p50, 1983.7 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 143.4 µs at p50, 1266.1 µs at p99.

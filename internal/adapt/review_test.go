@@ -70,9 +70,17 @@ func TestStalledRequestBodyGets408(t *testing.T) {
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
 	io.WriteString(conn, "POST /api/v1/customers HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"name\":")
 	start := time.Now()
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
 		t.Fatalf("no answer to a stalled body: %v", err)
+	}
+	// 0.7.1: after the 408 the proxy lets go of the connection at once,
+	// instead of waiting on the stalled client for good.
+	io.Copy(io.Discard, resp.Body)
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := br.ReadByte(); err != io.EOF {
+		t.Errorf("the connection stayed open after the 408: %v", err)
 	}
 	if resp.StatusCode != 408 || time.Since(start) > 3*time.Second {
 		t.Fatalf("status %d after %v", resp.StatusCode, time.Since(start))

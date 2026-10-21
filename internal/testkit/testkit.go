@@ -241,15 +241,16 @@ func (rc *Recorder) All() []Recorded {
 	return append([]Recorded(nil), rc.reqs...)
 }
 
-// EarlyAnswer is an upstream transport that answers as soon as it has read
-// the request body's declared length, before it has seen the body end, as a
-// fast upstream does in real life. It sends the answer in two parts, and
-// between them reads the request body once more, which must still report a
-// clean end. A proxy whose server closes the client's body when the answer
+// EarlyAnswer is an upstream transport that answers before it has seen the
+// end of the request body, as fast upstreams do in real life. In turn it
+// reads the whole declared length, half of it, or none of it (an upstream
+// that turns a request away unread). It sends the answer in two parts, and
+// between them reads the request body once more, which must still work. A proxy whose server closes the client's body when the answer
 // starts going out fails that read, and Go's transport then drops the
 // upstream connection mid-answer.
 type EarlyAnswer struct {
 	mu   sync.Mutex
+	n    int
 	errs []error
 }
 
@@ -261,8 +262,12 @@ func (e *EarlyAnswer) Errors() []error {
 }
 
 func (e *EarlyAnswer) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Body != nil && r.ContentLength > 0 {
-		if _, err := io.ReadFull(r.Body, make([]byte, r.ContentLength)); err != nil {
+	e.mu.Lock()
+	mode := e.n % 3
+	e.n++
+	e.mu.Unlock()
+	if r.Body != nil && r.ContentLength > 0 && mode < 2 {
+		if _, err := io.ReadFull(r.Body, make([]byte, r.ContentLength/int64(1+mode))); err != nil {
 			return nil, err
 		}
 	}
@@ -301,9 +306,10 @@ func (l *lateRead) Read(p []byte) (int, error) {
 
 func (l *lateRead) Close() error { return nil }
 
-// CheckEarlyAnswer sends a request with a body through a proxy whose
-// upstream is ea, and fails unless the whole answer arrived and the late
-// read of the request body saw a clean end.
+// CheckEarlyAnswer sends requests with a body through a proxy whose
+// upstream is ea, one for each way of answering early, and fails unless
+// every answer arrived whole and every late read of the request body
+// worked.
 func CheckEarlyAnswer(t testing.TB, proxyURL string, ea *EarlyAnswer) {
 	t.Helper()
 	for i := 0; i < 3; i++ {
@@ -317,8 +323,44 @@ func CheckEarlyAnswer(t testing.TB, proxyURL string, ea *EarlyAnswer) {
 		t.Fatalf("%d late reads, want 3", len(errs))
 	}
 	for _, err := range errs {
-		if err != io.EOF {
+		if err != nil && err != io.EOF {
 			t.Fatalf("the request body was closed under the upstream while the answer went out: %v", err)
 		}
+	}
+}
+
+// CheckHealthWithBody sends a health check that carries a body, then a
+// second request on the same connection. Both must be answered: a handler
+// that answers by itself must leave the body to the server, or the server
+// drops the connection.
+func CheckHealthWithBody(t testing.TB, base, path string) {
+	t.Helper()
+	for _, size := range []int{1, 100, 10000, 200000} {
+		conn, err := net.Dial("tcp", strings.TrimPrefix(base, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(10 * time.Second))
+		req := fmt.Sprintf("POST %s HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s", path, size, strings.Repeat("x", size))
+		req += "GET " + path + " HTTP/1.1\r\nHost: x\r\n\r\n"
+		go io.WriteString(conn, req)
+		br := bufio.NewReader(conn)
+		for i := 0; i < 2; i++ {
+			resp, err := http.ReadResponse(br, nil)
+			if err != nil {
+				conn.Close()
+				t.Fatalf("health check with a %d-byte body: response %d: %v", size, i+1, err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != 200 {
+				conn.Close()
+				t.Fatalf("health check with a %d-byte body: response %d is %d", size, i+1, resp.StatusCode)
+			}
+			if resp.Close {
+				break // the server may close after a large unread body; it must say so
+			}
+		}
+		conn.Close()
 	}
 }
