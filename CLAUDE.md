@@ -109,6 +109,18 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - Changes are made on the file's own lines, as for .env: comments, layout and every untouched line stay byte for byte; renames keep their line; dates keep their type. When a change can't be made on the lines, the file is written from its values, still exactly right but without comments.
 - Same promises as 0.4.0; `config diff` shows lists item by item. Example `examples/vendor-app-toml`. No new dependencies.
 
+### 0.8.0 AfterSchema (approved Oct 22 2026; the two open choices left to Claude: views for reads only, output to a file only)
+`aftermarket schema`: SQLite compatibility, so old reports, scripts and integrations keep working after an app's schema changes.
+- Reads databases and `.sql` schema dumps through the `sqlite3` program (as AfterHook does), read-only; no driver, no new dependencies. The sqlite3 code moves into one shared package.
+- `schema diff --old A --new B`: tables, columns, types, NOT NULL, defaults, keys, indexes, foreign keys, views and triggers, each change marked breaking for old readers or safe; text or JSON; exit 1 on anything breaking.
+- `schema compat --map map.yaml --out compat.sql`: compatibility views from a mapping file describing the old tables in terms of the new (renamed tables and columns, a column built from an expression, a fixed value for a dropped column); one deterministic SQL file, reviewed and applied by the user. Views serve reads only.
+- `schema check --map map.yaml --db new.db --queries old.sql`: prepares each old query against the new schema plus the views without running it, and lists every one that would fail, with its line; queries can also come from a record fixture.
+- `schema test`: fixtures pairing an old query, sample data and the expected rows.
+- Promises: the database is never written; old queries get the same rows through the views as from the old schema; generated SQL is the same bytes every run; check lists every problem.
+- Example `examples/legacy-shop` (v1 and v2 shop databases, a dozen old report queries that fail on v2 directly and pass on v2 with the views).
+- Not in 0.8.0: writes through the views, an apply step, PostgreSQL and MySQL, guessed renames, scanning app code.
+- Release smoke runs the schema commands where sqlite3 is present (Linux, macOS).
+
 ### Later, decided with the owner at the time
 Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
@@ -155,6 +167,9 @@ Afterlife and AfterTrace stay research; Afterlife only ever replaces documented 
 - Oct 21 2026: at the owner's choice, CI moved back to ubuntu-latest; four runs green on Linux and macOS.
 - Oct 22 2026: at the owner's choice, the stalled-upload case, built as 0.7.2. httpx.WatchBody wraps the client's live body once at the top of patch, adapt and record: every read must make progress within upstream_timeout (slow but moving uploads pass, a stall gets 408), the deadline is cleared once every byte has arrived and never moved after that, after a 101 or after the handler; the request is a copy, so Go's server keeps its own body checks; a read error sticks, so a cut-off body gets 400 and is never translated, drained or recorded as whole; an answer that starts before the body has ended closes the connection (set in ModifyResponse); the forwarded context outlives a half-close by upstream_timeout, so half-closed clients get their answer and a client that is gone frees the upstream call; adapt reads off bodies it replaces or drops, so those keep their connection; error answers carry Content-Length; done() closes the real body inside the handler. Four independent reviews: the first design brought back the empty-200 and connection-reuse traps in Go's server (deadlines during the background read, the server's own Request.Body replaced, bodies closed after the handler), the second found max_body+1, adapt keep-alive, half-close, 101 and Expect cases, the third a client that leaves no longer stopping the upstream call plus cut-off bodies, the fourth nothing blocking (two nits fixed, docs made exact). Every finding has a test that fails on the commit reviewed. Load runs clean, no panics logged. 474 tests recorded. Version raised to 0.7.2 for the automated release.
 
+- Oct 22 2026: 0.7.2 released and verified (GitHub cancelled the Intel macOS smoke job for lack of runners; rerun, then published). All archives, SHA256SUMS, latest links; the downloaded binary ran live in front of a test upstream with upstream_timeout 500ms: a stalled upload got 408 at 503ms and its connection closed, a stalled upload to a dead upstream got 502 in 1ms, a byte every 100ms got through whole, a cut-off upload got 400, a half-closed client got the real answer, an ordinary POST kept its connection; audit reasons right, no panics. Site: post "Aftermarket Hardens Patch, Adapt and Record Against Stalled and Cut Off Uploads", roadmap status 0.7.2, hero 474 tests. Hugo leaves out future-dated posts, so a post dated by the owner's clock (UTC+3) ahead of UTC doesn't build; date posts by UTC. No softdevstudio.com note for this patch release.
+
 ## Next
 
-0.7.2 goes out once its release is verified. Then AfterSchema: a plan for 0.8.0 (SQLite compatibility: schema diff, compatibility views from a mapping file, checks of old queries, read-only first, output file only) is with the owner for approval; nothing is started until then. AfterBridge needs a named target system.
+1. 0.8.0 AfterSchema, as above.
+2. AfterBridge: a plan for 0.9.0 (a read-only JSON API over an old app's CSV exports and SQLite files, with `bridge serve|check|convert|test`) is with the owner for approval; nothing is started until then.
