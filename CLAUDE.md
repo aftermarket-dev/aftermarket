@@ -103,7 +103,8 @@ AfterGuard (needs a written threat model first), AfterHook. Afterlife and AfterT
 
 - Oct 21 2026: 0.4.0 AfterConfig built (internal/config, `config check|diff|apply|test`, examples/vendor-app, docs/config.md). Independent review found 1 high issue (rename into a child of itself deleted the value) and 7 medium ones (YAML strings with `:` written bare, YAML key types changed for other readers, config test failures printed secrets, secrets printed after rename/copy, missing secret words and URL passwords, .env rewrites expanding `$` and losing comments, docs overclaiming byte-for-byte JSON) plus low ones (CRLF, top-level list delete, deep nesting, release smoke gaps); all fixed with regression tests. Every output is now read back before it's written, and an overlay with nothing to change returns the base byte for byte. yamlite gained Pair.KeyQuoted. 296 tests recorded. This workspace machine is about twice as slow as before (direct baseline 57 µs vs 25-35 µs), so latency figures in test/results doubled with no proxy change; the site hero no longer shows a latency figure. Version raised to 0.4.0 for the automated release.
 
+- Oct 21 2026: 0.4.0 released and verified (all archives, SHA256SUMS, latest links; the downloaded binary ran config check, diff, apply, the 1.1 stop with the old output unchanged, the refusal to write the base, and config test). Release smoke now covers apply, the 1.1 stop and the refusal on every platform. Site: AfterConfig reference page (/config-reference/), quick start part four, use case, roadmap, concepts, release, testing and case study posts; hero figures now 296 tests, 12 of 12, 2 of 7, 0 dependencies. softdevstudio.com note published.
+
 ## Next
 
-1. 0.4.0 AfterConfig, as approved above.
-2. After it: AfterGuard, AfterHook or something else, decided with the owner; nothing is started until then.
+AfterConfig is done. What comes next (AfterGuard, AfterHook or something else) is decided with the owner; nothing is started until then. TOML for AfterConfig is the obvious small follow-up if asked.
