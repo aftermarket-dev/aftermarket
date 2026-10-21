@@ -115,3 +115,11 @@ func TestMissingProgram(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestNewEnough(t *testing.T) {
+	for v, want := range map[string]bool{"3.37.0": true, "3.45.1": true, "4.0": true, "3.36.9": false, "3.8.11": false, "": false, "x": false} {
+		if newEnough(v) != want {
+			t.Errorf("%q: want %v", v, want)
+		}
+	}
+}

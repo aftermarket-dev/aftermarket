@@ -119,6 +119,10 @@ jobs:
             cp examples/legacy-app/receiver/main.go "$work/examples/legacy-app/receiver/"
             mkdir -p "$work/examples/legacy-admin"
             cp examples/legacy-admin/guard.yaml examples/legacy-admin/fixture.yaml "$work/examples/legacy-admin/"
+            mkdir -p "$work/examples/legacy-shop/v1" "$work/examples/legacy-shop/v2"
+            cp examples/legacy-shop/map.yaml examples/legacy-shop/reports.sql examples/legacy-shop/compat.sql "$work/examples/legacy-shop/"
+            cp examples/legacy-shop/v1/shop.sql "$work/examples/legacy-shop/v1/"
+            cp examples/legacy-shop/v2/shop.sql "$work/examples/legacy-shop/v2/"
             if [ "$os" = windows ]; then
               (cd "$(dirname "$work")" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
             else
@@ -229,6 +233,20 @@ jobs:
           kill $gpid || true
           grep -q '"event":"denied"' guard.log
           grep -q '"event":"rejected"' guard.log
+          # AfterSchema, where sqlite3 is there (not on the Windows runner).
+          if command -v sqlite3 >/dev/null && [ ! -f aftermarket.exe ]; then
+            sqlite3 -version
+            (
+              cd examples/legacy-shop
+              if $PREFIX "../../$bin" schema diff --old v1/shop.sql --new v2/shop.sql; then exit 1; fi
+              $PREFIX "../../$bin" schema diff --map map.yaml
+              $PREFIX "../../$bin" schema check --queries reports.sql --map map.yaml
+              $PREFIX "../../$bin" schema test --queries reports.sql --map map.yaml
+              $PREFIX "../../$bin" schema compat --map map.yaml --out ../../smoke-compat.sql
+              cmp compat.sql ../../smoke-compat.sql
+              if $PREFIX "../../$bin" schema compat --map map.yaml --out v2/shop.sql; then exit 1; fi
+            )
+          fi
           # The vendor's file is never written.
           if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --out examples/vendor-app/1.0/config.json; then exit 1; fi
 

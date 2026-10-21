@@ -54,12 +54,29 @@ func New() *Runner {
 // ErrNoSQLite3 means the sqlite3 program isn't there.
 var ErrNoSQLite3 = errors.New("the sqlite3 program was not found; install it, or set AFTERMARKET_SQLITE3 to its path")
 
-// Available reports whether sqlite3 can be run.
+// Available reports whether sqlite3 can be run and is new enough: safe
+// mode, which keeps SQL from writing files, came in 3.37.
 func (r *Runner) Available() error {
 	if _, err := exec.LookPath(r.Bin); err != nil {
 		return ErrNoSQLite3
 	}
+	res, err := proc.Run(context.Background(), proc.Spec{Args: []string{r.Bin, "-version"}, Timeout: r.Timeout, MaxOut: 4096})
+	if err != nil {
+		return fmt.Errorf("running %s -version: %w", r.Bin, err)
+	}
+	if v := strings.Fields(string(res.Stdout)); len(v) == 0 || !newEnough(v[0]) {
+		return fmt.Errorf("%s is too old: AfterSchema needs sqlite3 3.37 or later (it says %q)", r.Bin, strings.TrimSpace(string(res.Stdout)))
+	}
 	return nil
+}
+
+// newEnough reports whether a version such as 3.45.1 is at least 3.37.
+func newEnough(v string) bool {
+	var major, minor int
+	if n, _ := fmt.Sscanf(v, "%d.%d", &major, &minor); n != 2 {
+		return false
+	}
+	return major > 3 || major == 3 && minor >= 37
 }
 
 // Error is an error SQLite reported. Where says which part of the input it

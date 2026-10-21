@@ -11,12 +11,13 @@ Aftermarket is one program, `aftermarket`, with a subcommand per tool. The tools
 - **AfterConfig** (`aftermarket config`) changes a vendor's config file through an overlay, without ever editing the file, and stops when an upgrade changed something your overlay relies on.
 - **AfterHook** (`aftermarket hook`) watches files, folders, HTTP endpoints and command output that change without telling anyone, and sends a signed webhook for each change.
 - **AfterGuard** (`aftermarket guard`) stands in front of an app that can't protect itself, such as an old admin panel with no login, and turns away requests that break your rules: no credential, wrong network, too many tries, or a request that could be read two ways.
+- **AfterSchema** (`aftermarket schema`) keeps an old app's SQL working after its SQLite database moved to a new schema. You describe the old tables in terms of the new ones, and it writes views that show the old tables again, after checking that every old read gives the same rows.
 
 It's a single Go binary with no dependencies, licensed under Apache 2.0. Website: [aftermarket.dev](https://aftermarket.dev/).
 
 ## Which tool?
 
-Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know. Use **guard** when an app has no login, no rate limits or a page that should never have been public, and you can't change the app.
+Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know. Use **guard** when an app has no login, no rate limits or a page that should never have been public, and you can't change the app. Use **schema** when the database under an old app was reorganised and the app's queries, reports or scripts still expect the old tables.
 
 ## AfterPatch in one example
 
@@ -235,6 +236,42 @@ aftermarket guard run --config guard.yaml --upstream http://127.0.0.1:9100 --lis
 
 The first rule that matches decides, and a request no rule allows gets 403. The admin pages need the admin login, from the office network; five wrong passwords from one address and that address waits. A request that could be read two ways, such as `/x/..%2fadmin` or one with both `Content-Length` and `Transfer-Encoding`, gets 400 and never reaches the app. Every decision is logged as one JSON line, without credentials. The app must listen where only AfterGuard can reach it, such as `127.0.0.1`. The example is [`examples/legacy-admin`](examples/legacy-admin), the full format is in [docs/guard.md](docs/guard.md), and what AfterGuard defends against is in [docs/guard-threat-model.md](docs/guard-threat-model.md).
 
+## AfterSchema in one example
+
+Shop 2.0 renamed `customers` to `accounts`, split the name in two, kept deleted accounts with a `deleted_at` date, and stores order totals in whole cents. The old reporting scripts still ask for `customers` and `orders`. A mapping describes the old tables in terms of the new ones:
+
+```yaml
+version: 1
+old: v1/shop.sql
+new: v2/shop.sql
+views:
+  - old: customers
+    from: accounts
+    columns:
+      name: first_name || ' ' || last_name
+      fax: null
+      created: created_at
+    where: deleted_at IS NULL
+  - old: orders
+    from: purchases
+    columns:
+      customer_id: account_id
+      total: total_cents / 100.0
+      status: state
+      placed: placed_at
+```
+
+```text
+$ aftermarket schema check --queries reports.sql --new v2/shop.sql
+1 of 12 queries compile on the new schema
+$ aftermarket schema test --map map.yaml --queries reports.sql
+12 of 12 reads give the same rows on the new schema with the compatibility views as on the old one
+$ aftermarket schema compat --map map.yaml --out compat.sql
+wrote compat.sql: 2 view(s): customers, orders
+```
+
+`compat.sql` holds plain `CREATE VIEW` statements to review and apply. AfterSchema never writes a database itself. `schema diff` lists every change between the two schemas and marks the ones that break old queries. The example is [`examples/legacy-shop`](examples/legacy-shop), and the full format is in [docs/schema.md](docs/schema.md). AfterSchema needs the `sqlite3` command, 3.37 or later.
+
 ## Install
 
 Download the archive for your system from the [latest release](https://github.com/aftermarket-dev/aftermarket/releases/latest), unpack it and put `aftermarket` on your PATH.
@@ -310,6 +347,11 @@ aftermarket guard check --config guard.yaml
 aftermarket guard test  --config guard.yaml --fixture fixture.yaml
 aftermarket guard hash  < key.txt
 
+aftermarket schema diff   --old A --new B [--map map.yaml] [--json]
+aftermarket schema compat --map map.yaml --out compat.sql [--new B]
+aftermarket schema check  --queries old.sql [--map map.yaml] [--new B]
+aftermarket schema test   --map map.yaml --queries old.sql [--old A] [--new B]
+
 aftermarket version
 ```
 
@@ -338,6 +380,7 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **hook delivers every change at least once.** Each change gives exactly one event, nothing is lost while the receiver is down or across restarts, and a repeat after a crash carries the same id. Values under secret-looking keys are sent as `REDACTED`, and the signing secret never leaves the environment.
 - **guard lets through only what the rules allow, and nothing that could be read two ways.** A request turned away never reaches the app, allowed traffic passes byte for byte, rate limits hold with many clients at once and can't be used to fill memory, a client can't set its own identity or address, and no credential reaches the log. The tests check each of these.
 - **config never writes the vendor's file,** whatever path you give `--out`. A failed apply leaves the old output as it was, and applying twice gives the same bytes. Values under keys such as `password` or `token` are never printed.
+- **schema never writes a database.** Databases are opened read-only in the `sqlite3` shell's safe mode, and `compat` writes only its `--out` file, never one of its inputs. Every read `test` passes gives the same rows, with the same types, through the views as on the old database.
 
 Recorded results, including the latency each tool adds, are in [test/results](test/results).
 
@@ -352,6 +395,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - AfterGuard checks API keys and HTTP Basic logins; single sign-on (OAuth, OpenID Connect) isn't there yet. It has no attack signatures for SQL injection and the like, rate limits aren't shared between several AfterGuard processes, and it serves HTTP/1.1 only. When its table of rate-limit buckets is full of buckets in use, requests that need a new one get 429, so size `limit_table` above the number of addresses you expect in a minute or so.
 - AfterConfig doesn't keep comments when it writes YAML, or when a TOML change can't be made on the file's own lines, such as turning a table into a single value. In that case sub-tables also move after the plain keys of their table, as TOML requires. The vendor's file keeps its comments.
 - Config files use a strict subset of YAML: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
+- AfterSchema's views serve reads; an old app that writes to a mapped table gets an error from SQLite. An old table whose name the new schema still uses for a table can't get a view. SQLite only.
 - One upstream per proxy. Run one proxy per service.
 - record redacts headers, query values and JSON fields. Values in a URL path and in bodies that aren't JSON are stored as sent, so keep those out with `when:`. Binary bodies aren't recorded at all.
 
@@ -364,7 +408,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.7.0 adds TOML to `aftermarket config`. 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.8.0 adds `aftermarket schema` (AfterSchema). 0.7.0 added TOML to `aftermarket config`, 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 

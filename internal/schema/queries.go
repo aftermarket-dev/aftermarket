@@ -3,6 +3,9 @@ package schema
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 
@@ -158,7 +161,9 @@ func Check(ctx context.Context, r *sqlitecli.Runner, src sqlitecli.Source, setup
 
 // Compare runs each read on the old schema and on the new one with setup,
 // and passes it when both give the same rows, column names, values and
-// types alike, in the same order. Statements that write are skipped.
+// types alike, in the same order. A query with no ORDER BY promises no
+// order, so for it the same rows in another order pass too. Statements
+// that write are skipped.
 func Compare(ctx context.Context, r *sqlitecli.Runner, oldSrc, newSrc sqlitecli.Source, setup string, stmts []Stmt) []Result {
 	return parallel(stmts, func(s Stmt) Result {
 		res := Result{Stmt: s}
@@ -176,13 +181,28 @@ func Compare(ctx context.Context, r *sqlitecli.Runner, oldSrc, newSrc sqlitecli.
 			res.Problem = "on the new schema: " + message(err)
 			return res
 		}
-		if want == got {
+		if want == got || (!orderBy.MatchString(s.SQL) && sameRows(want, got)) {
 			res.OK = true
 			return res
 		}
 		res.Problem = firstDifference(want, got)
 		return res
 	})
+}
+
+var orderBy = regexp.MustCompile(`(?i)\border\s+by\b`)
+
+// sameRows reports whether two quoted results have the same header and the
+// same rows, counting repeats, in any order.
+func sameRows(want, got string) bool {
+	w := strings.Split(strings.TrimSuffix(want, "\n"), "\n")
+	g := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
+	if len(w) != len(g) || w[0] != g[0] {
+		return false
+	}
+	sort.Strings(w[1:])
+	sort.Strings(g[1:])
+	return slices.Equal(w, g)
 }
 
 func message(err error) string {

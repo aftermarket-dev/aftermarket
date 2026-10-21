@@ -348,3 +348,20 @@ func TestRandomRenamesReadTheSame(t *testing.T) {
 		}
 	}
 }
+
+// Without ORDER BY the order of rows is not part of the answer; with it,
+// it is.
+func TestCompareOrder(t *testing.T) {
+	r := runner(t)
+	old := sqlFile(t, "CREATE TABLE t (a); INSERT INTO t VALUES (1), (2), (2), (3);")
+	nw := sqlFile(t, "CREATE TABLE n (a); INSERT INTO n VALUES (3), (2), (1), (2);")
+	setup := "CREATE TEMP VIEW t AS SELECT a FROM n;"
+	res := Compare(context.Background(), r, old, nw, setup, Split("SELECT a FROM t; SELECT a FROM t ORDER BY rowid; SELECT a FROM t WHERE a > 1"))
+	if !res[0].OK || res[1].OK || !strings.Contains(res[1].Problem, "row 1 differs: old 1, new 3") || !res[2].OK {
+		t.Fatalf("%+v", res)
+	}
+	nw2 := sqlFile(t, "CREATE TABLE n (a); INSERT INTO n VALUES (3), (2), (1), (1);")
+	if res := Compare(context.Background(), r, old, nw2, setup, Split("SELECT a FROM t")); res[0].OK {
+		t.Fatal("different repeats passed")
+	}
+}
