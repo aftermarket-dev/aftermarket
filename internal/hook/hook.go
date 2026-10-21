@@ -134,6 +134,18 @@ func loadState(path string) (*State, error) {
 	if st.Sources == nil {
 		st.Sources = map[string]*SourceState{}
 	}
+	// The state file is written indented, and that indents the stored bodies
+	// too. Compact them again, so an event sent after a restart is the same
+	// bytes as one sent at once.
+	for _, d := range st.Queue {
+		if d == nil || len(d.Body) == 0 || d.Webhook == "" {
+			return nil, fmt.Errorf("the state file %s can't be read: a queued event has no body or webhook; move it aside to start from a new baseline (its queue may hold unsent events)", path)
+		}
+		var buf bytes.Buffer
+		if json.Compact(&buf, d.Body) == nil {
+			d.Body = buf.Bytes()
+		}
+	}
 	return st, nil
 }
 

@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.5.0
-- Recorded: 2026-10-21T12:47:33Z
+- Version: 0.5.1
+- Recorded: 2026-10-21T13:28:15Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-331 of 331 tests passed (race detector on).
+333 of 333 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -109,6 +109,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/hook | TestABusyFileDoesNotBlockTheFolder | pass |
 | internal/hook | TestAChangeSeenAgainAfterACrashKeepsItsID | pass |
 | internal/hook | TestAFileThatBlinksGivesNoEvent | pass |
+| internal/hook | TestAQueuedEventWithoutABodyIsRefused | pass |
 | internal/hook | TestBaselinesDryRunAndState | pass |
 | internal/hook | TestCommandSources | pass |
 | internal/hook | TestCommandTimeoutWithAChildHoldingStdout | pass |
@@ -127,6 +128,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/hook | TestLineDiffsKeepSecretsOut | pass |
 | internal/hook | TestLoadReportsEveryProblemInLineOrder | pass |
 | internal/hook | TestNothingIsLostWhileTheReceiverIsDown | pass |
+| internal/hook | TestQueuedEventsKeepTheirBytesAcrossRestarts | pass |
 | internal/hook | TestRedactLine | pass |
 | internal/hook | TestSecretsStayOut | pass |
 | internal/hook | TestSendToNamesEachWebhookOnce | pass |
@@ -230,17 +232,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 74.4 µs | 420.0 µs | 22569 |
-| proxy, no rule matches | 159.4 µs | 1242.8 µs | 5829 |
-| proxy, both example rules applied | 218.9 µs | 2018.4 µs | 5226 |
-| adapt: direct to v2, one customer | 52.1 µs | 365.8 µs | 22097 |
-| adapt: v1 lookup rebuilt from v2 | 199.2 µs | 2283.3 µs | 4965 |
-| adapt: direct to v2, list | 66.3 µs | 443.0 µs | 19891 |
-| adapt: v1 list rebuilt from v2 | 255.7 µs | 2308.4 µs | 5432 |
-| record: v2 lookup saved to a fixture | 231.1 µs | 1894.6 µs | 5222 |
+| direct to upstream | 65.7 µs | 311.0 µs | 22003 |
+| proxy, no rule matches | 176.3 µs | 1281.6 µs | 5197 |
+| proxy, both example rules applied | 242.4 µs | 2254.8 µs | 5066 |
+| adapt: direct to v2, one customer | 53.5 µs | 441.4 µs | 21019 |
+| adapt: v1 lookup rebuilt from v2 | 200.2 µs | 2062.1 µs | 5941 |
+| adapt: direct to v2, list | 65.5 µs | 397.8 µs | 21407 |
+| adapt: v1 list rebuilt from v2 | 300.5 µs | 2561.1 µs | 4061 |
+| record: v2 lookup saved to a fixture | 244.2 µs | 1916.1 µs | 5942 |
 
-Added by the proxy when no rule matches: 85.0 µs at p50, 822.8 µs at p99.
-Added by the proxy with both example rules applied: 144.5 µs at p50, 1598.4 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 147.1 µs at p50, 1917.5 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 189.4 µs at p50, 1865.4 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 179.0 µs at p50, 1528.8 µs at p99.
+Added by the proxy when no rule matches: 110.6 µs at p50, 970.6 µs at p99.
+Added by the proxy with both example rules applied: 176.7 µs at p50, 1943.8 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 146.7 µs at p50, 1620.7 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 235.0 µs at p50, 2163.3 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 190.7 µs at p50, 1474.7 µs at p99.

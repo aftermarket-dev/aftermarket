@@ -348,3 +348,37 @@ func TestDisplayURLHidesPathsAndQueries(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// An event sent after a restart, from the state file, is the same bytes as
+// the event first built, not the indented copy the state file holds.
+func TestQueuedEventsKeepTheirBytesAcrossRestarts(t *testing.T) {
+	e := setup(t, "  - id: s\n    file: {path: s.json}\n")
+	e.write(t, "s.json", `{"a":1}`)
+	e.recv.fail = 1
+	h := e.hook(t)
+	e.round(t, h)
+	e.write(t, "s.json", `{"a":2}`)
+	e.clock.add(10 * time.Second)
+	if _, err := h.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := string(h.state.Queue[0].Body)
+	h.Deliver(context.Background()) // fails once
+	h = e.hook(t)                   // restart from the state file
+	e.round(t, h)
+	e.recv.mu.Lock()
+	defer e.recv.mu.Unlock()
+	if len(e.recv.bodies) != 1 || string(e.recv.bodies[0]) != want {
+		t.Fatalf("sent %q, want %q", e.recv.bodies, want)
+	}
+}
+
+// A hand-edited state file with a queued event missing its body is refused,
+// not sent as an empty POST.
+func TestAQueuedEventWithoutABodyIsRefused(t *testing.T) {
+	e := setup(t, "  - id: s\n    file: {path: s.json}\n")
+	os.WriteFile(e.cfg.State, []byte(`{"version":1,"sources":{},"queue":[{"webhook":"w","event_id":"x"}]}`), 0o600)
+	if _, err := New(e.cfg, Options{Env: func(string) string { return "test-secret" }}); err == nil || !strings.Contains(err.Error(), "move it aside") {
+		t.Fatalf("err %v", err)
+	}
+}
