@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -212,7 +213,12 @@ func fragment(text string) string {
 			return "no -- comments in SQL here (a # comment after the YAML value, or /* */, works)"
 		}
 	}
-	if _, err := sqlitecli.Split(text); err != nil {
+	// As it will be sent: inside a statement, indented.
+	if err := sqlitecli.ShellSafe("SELECT\n  " + text + "\n;\n"); err != nil {
+		var le *sqlitecli.LineError
+		if errors.As(err, &le) {
+			return le.Msg
+		}
 		return err.Error()
 	}
 	return ""

@@ -1,6 +1,7 @@
 package sqlitecli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -148,13 +149,15 @@ type Stmt struct {
 // Split cuts text into statements at semicolons, as SQLite does: not
 // inside strings, quoted names or comments, and inside a CREATE TRIGGER
 // only after its END. Statements that are only comments are left out.
-// Text the sqlite3 shell would read as one of its own commands is refused.
+// Each statement is checked as it will be sent to sqlite3 (its text, then
+// a ";" line), and refused when the shell could take any of it as one of
+// its own commands.
 func Split(text string) ([]Stmt, error) {
-	toks, err := Lex(text)
-	if err != nil {
+	if err := controlBytes(text); err != nil {
 		return nil, err
 	}
-	if err := shellSafe(text, toks); err != nil {
+	toks, err := Lex(text)
+	if err != nil {
 		return nil, err
 	}
 	var out []Stmt
@@ -184,6 +187,15 @@ func Split(text string) ([]Stmt, error) {
 		cur = append(cur, t)
 	}
 	flush()
+	for _, st := range out {
+		if err := ShellSafe(st.SQL + "\n;\n"); err != nil {
+			var le *LineError
+			if errors.As(err, &le) {
+				return nil, fmt.Errorf("line %d: %s", st.Line+le.Line-1, le.Msg)
+			}
+			return nil, err
+		}
+	}
 	return out, nil
 }
 
@@ -207,15 +219,22 @@ func isTrigger(ts []Token) bool {
 				break
 			}
 			words = append(words, t.Upper())
-			if len(words) == 3 {
+			if len(words) == 6 {
 				break
 			}
+		}
+	}
+	// sqlite3_complete reads EXPLAIN and EXPLAIN QUERY PLAN before CREATE.
+	if len(words) > 0 && words[0] == "EXPLAIN" {
+		words = words[1:]
+		if len(words) >= 2 && words[0] == "QUERY" && words[1] == "PLAN" {
+			words = words[2:]
 		}
 	}
 	if len(words) < 2 || words[0] != "CREATE" {
 		return false
 	}
-	return words[1] == "TRIGGER" || len(words) == 3 && (words[1] == "TEMP" || words[1] == "TEMPORARY") && words[2] == "TRIGGER"
+	return words[1] == "TRIGGER" || len(words) >= 3 && (words[1] == "TEMP" || words[1] == "TEMPORARY") && words[2] == "TRIGGER"
 }
 
 func lastWord(ts []Token) string {
@@ -230,52 +249,110 @@ func lastWord(ts []Token) string {
 	return ""
 }
 
-// shellSafe refuses lines the sqlite3 shell would take as its own: a line
-// that is only GO or / (it ends a statement) anywhere outside a string or
-// comment, and a line starting with . or # where no statement is open
-// (a shell command or comment).
-func shellSafe(text string, toks []Token) error {
-	pending := false // a statement has significant text since the last ;
-	off := 0
-	lineStart := map[int]bool{0: true}
+// LineError is a problem at a line of the text checked.
+type LineError struct {
+	Line int
+	Msg  string
+}
+
+func (e *LineError) Error() string { return fmt.Sprintf("line %d: %s", e.Line, e.Msg) }
+
+// controlBytes refuses bytes the shell's line reader or SQLite's tokenizer
+// could read differently from Lex: NUL and other control characters.
+func controlBytes(text string) error {
+	line := 1
 	for i := 0; i < len(text); i++ {
-		if text[i] == '\n' {
-			lineStart[i+1] = true
-		}
-	}
-	trig := []Token{}
-	for _, t := range toks {
-		// Check every line that starts within this token.
-		for p := off; p < off+len(t.Text); p++ {
-			if !lineStart[p] {
-				continue
-			}
-			lineEnd := strings.IndexByte(text[p:], '\n')
-			ln := text[p:]
-			if lineEnd >= 0 {
-				ln = text[p : p+lineEnd]
-			}
-			trimmed := strings.TrimSpace(ln)
-			atStart := p == off
-			inStringOrComment := !atStart && (t.Kind == String || t.Kind == Comment)
-			if !inStringOrComment && (trimmed == "/" || strings.EqualFold(trimmed, "go")) {
-				return fmt.Errorf("line %d is only %q, which the sqlite3 shell reads as the end of a statement", lineOf(text, p), trimmed)
-			}
-			if !pending && (strings.HasPrefix(ln, ".") || strings.HasPrefix(ln, "#")) {
-				return fmt.Errorf("line %d starts with %q between statements, which the sqlite3 shell reads as its own command", lineOf(text, p), ln[:1])
-			}
-		}
-		off += len(t.Text)
+		c := text[i]
 		switch {
-		case t.Kind == Semi && (!isTrigger(trig) || lastWord(trig) == "END"):
-			pending = false
-			trig = trig[:0]
-		case t.Significant():
-			pending = true
-			trig = append(trig, t)
+		case c == '\n':
+			line++
+		case c == '\t' || c == '\r' || c == '\f':
+		case c < 0x20 || c == 0x7f:
+			return &LineError{line, fmt.Sprintf("control character 0x%02x; SQL text may hold only tabs and line breaks", c)}
 		}
 	}
 	return nil
 }
 
-func lineOf(text string, off int) int { return strings.Count(text[:off], "\n") + 1 }
+// ShellSafe replays text through the rules the sqlite3 shell reads its
+// input by, from a point where no statement is open, and refuses it when
+// the shell could run any part of it as one of its own commands:
+//   - a line starting with "." or "#" while no statement is open is a
+//     shell command or comment;
+//   - a line that is only GO or "/" (comments may follow) ends a
+//     statement, so text after it could be a command.
+//
+// The GO and "/" rule is applied everywhere, even inside strings, which
+// refuses a little more than the shell would.
+func ShellSafe(text string) error {
+	if err := controlBytes(text); err != nil {
+		return err
+	}
+	lines := strings.SplitAfter(text, "\n")
+	var buf strings.Builder
+	for i, ln := range lines {
+		n := i + 1
+		if !open(buf.String()) && (strings.HasPrefix(ln, ".") || strings.HasPrefix(ln, "#")) {
+			return &LineError{n, fmt.Sprintf("starts with %q where no statement is open; the sqlite3 shell would run it as its own command", ln[:1])}
+		}
+		if terminator(ln) {
+			return &LineError{n, "is only GO or /, which the sqlite3 shell reads as the end of a statement"}
+		}
+		buf.WriteString(ln)
+		if !open(buf.String()) {
+			buf.Reset()
+		}
+	}
+	return nil
+}
+
+// open reports whether text holds the start of a statement that hasn't
+// ended: anything but space and comments after the last statement end, or
+// a string or comment that is still open.
+func open(text string) bool {
+	toks, err := Lex(text)
+	if err != nil {
+		return true
+	}
+	var cur []Token
+	for _, t := range toks {
+		if t.Kind == Semi && (!isTrigger(cur) || lastWord(cur) == "END") {
+			cur = cur[:0]
+			continue
+		}
+		if t.Significant() {
+			cur = append(cur, t)
+		}
+	}
+	return len(cur) > 0
+}
+
+// terminator reports whether a line is one the shell takes as the end of
+// a statement: GO or "/", then only spaces and comments. A comment that
+// doesn't end on the line counts as one, to be safe.
+func terminator(ln string) bool {
+	t := strings.TrimLeft(ln, " \t\r\f\v\n")
+	switch {
+	case strings.HasPrefix(t, "/") && !strings.HasPrefix(t, "/*"):
+		t = t[1:]
+	case len(t) >= 2 && strings.EqualFold(t[:2], "go") && (len(t) == 2 || !isWordPart(t[2])):
+		t = t[2:]
+	default:
+		return false
+	}
+	for {
+		t = strings.TrimLeft(t, " \t\r\f\v\n")
+		switch {
+		case t == "", strings.HasPrefix(t, "--"):
+			return true
+		case strings.HasPrefix(t, "/*"):
+			end := strings.Index(t[2:], "*/")
+			if end < 0 {
+				return true
+			}
+			t = t[2+end+2:]
+		default:
+			return false
+		}
+	}
+}

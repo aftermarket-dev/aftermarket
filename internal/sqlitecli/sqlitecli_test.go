@@ -155,6 +155,20 @@ func TestShellCommandsAreRefused(t *testing.T) {
 		"SELECT 1 /* never ends",
 		"SELECT [never ends",
 		"SELECT \"never ends",
+		// From the second review: a statement moved to the start of a line,
+		// NUL bytes, and terminators followed by comments.
+		"SELECT 1; .trace out.txt",
+		"CREATE TABLE a(x);\n  .trace out.txt",
+		"SELECT 1 \x00'\n;\n.trace out.txt\n'",
+		"SELECT 1 AS GO\nGO -- x\n.trace out.txt\n;",
+		"SELECT 1\n/ /* x */\n.trace out.txt",
+		"SELECT 1\nGO /* c */\n.trace out.txt",
+		"SELECT 1\n\tgo\r\n.trace out.txt",
+		"SELECT 1\x01",
+		// Refused though the shell would accept them: GO and / lines are
+		// refused even inside strings and comments.
+		"SELECT 'a\nGO\n'",
+		"SELECT 1 /*\n/\n*/",
 	} {
 		if _, err := Split(text); err == nil {
 			t.Errorf("%q was accepted", text)
@@ -162,10 +176,15 @@ func TestShellCommandsAreRefused(t *testing.T) {
 	}
 	// The same characters where the shell can't take them as commands.
 	for _, text := range []string{
-		"SELECT 'a\n.trace x\nGO\n/'",
-		"SELECT 1 /*\nGO\n*/",
+		"SELECT 'a\n.trace x\n'",
+		"SELECT 1 /*\n.trace x\n*/",
 		"SELECT\n  .5",
+		"SELECT\n.5",
 		"SELECT 1 -- go",
+		"SELECT 10\n  / 2",
+		"SELECT 1 AS gone\n",
+		"SELECT 1\n//",
+		"CREATE TRIGGER t AFTER INSERT ON x BEGIN\n  SELECT 1;\n.5;\nEND",
 	} {
 		if _, err := Split(text); err != nil {
 			t.Errorf("%q: %v", text, err)

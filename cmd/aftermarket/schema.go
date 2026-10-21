@@ -183,6 +183,10 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 		sql := schema.SQL(views, filepath.Base(*mapPath), false)
 		// The script must read as exactly the statements written: BEGIN,
 		// a DROP and a CREATE per view, COMMIT.
+		if err := sqlitecli.ShellSafe(sql); err != nil {
+			fmt.Fprintf(stderr, "aftermarket: the views would not be safe to feed to sqlite3 (%v); nothing was written\n", err)
+			return 1
+		}
 		if stmts, err := sqlitecli.Split(sql); err != nil || len(stmts) != 2*len(views)+2 {
 			fmt.Fprintf(stderr, "aftermarket: the views would not read back as written (%v); nothing was written\n", err)
 			return 1

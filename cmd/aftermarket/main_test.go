@@ -477,6 +477,12 @@ func TestSchemaRefusesShellCommands(t *testing.T) {
 	evilMap := write("evil-map.yaml", "version: 1\nold: v1/shop.sql\nnew: real.db\nviews:\n  - old: customers\n    from: accounts\n    columns:\n      name: first_name\n      fax: null\n      created: created_at\n    where: |\n      deleted_at IS NULL\n      /\n      .trace "+realDB+"\n      SELECT 'pwned'\n")
 	evilSchema := write("evil.sql", string(v2)+"\n.trace "+pwn+"\nSELECT 1;\n")
 	spoof := write("spoof.sql", string(v2)+"\nSELECT '@@aftermarket-output@@';\n/*")
+	// From the second review: a statement moved to the start of a line,
+	// a NUL byte, and terminator lines followed by comments.
+	moved := write("moved.sql", string(v2)+"\nSELECT 1; .trace "+pwn+"\nCREATE TABLE a(x);\n  .trace "+pwn+"\n")
+	nul := write("nul.sql", "SELECT 1 \x00'\n;\n.trace "+pwn+"\n'\n")
+	goComment := write("go.sql", "SELECT 1 AS GO\nGO -- x\n.trace "+pwn+"\n;\n")
+	goMap := write("go-map.yaml", "version: 1\nold: v1/shop.sql\nnew: v2/shop.sql\nviews:\n  - old: customers\n    from: accounts\n    columns:\n      name: first_name\n      fax: null\n      created: created_at\n    where: |\n      1\n      GO /* c */\n      .trace "+pwn+"\n      SELECT 1\n")
 	for _, args := range [][]string{
 		{"schema", "test", "--map", mp, "--queries", evilQueries},
 		{"schema", "check", "--map", mp, "--queries", evilQueries},
@@ -484,6 +490,10 @@ func TestSchemaRefusesShellCommands(t *testing.T) {
 		{"schema", "check", "--map", evilMap, "--queries", filepath.Join(dir, "reports.sql")},
 		{"schema", "diff", "--old", filepath.Join(dir, "v1/shop.sql"), "--new", evilSchema},
 		{"schema", "diff", "--old", filepath.Join(dir, "v1/shop.sql"), "--new", spoof},
+		{"schema", "diff", "--old", moved, "--new", filepath.Join(dir, "v2/shop.sql")},
+		{"schema", "check", "--queries", nul, "--new", filepath.Join(dir, "v2/shop.sql")},
+		{"schema", "check", "--queries", goComment, "--new", filepath.Join(dir, "v2/shop.sql")},
+		{"schema", "compat", "--map", goMap, "--out", filepath.Join(dir, "c.sql")},
 	} {
 		code, out, errs := runCLI(args...)
 		if code == 0 {
@@ -504,7 +514,7 @@ func TestSchemaRefusesShellCommands(t *testing.T) {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	if got := strings.Join(names, " "); got != "evil-map.yaml evil.sql map.yaml q.sql real.db reports.sql spoof.sql v1 v2" {
+	if got := strings.Join(names, " "); got != "evil-map.yaml evil.sql go-map.yaml go.sql map.yaml moved.sql nul.sql q.sql real.db reports.sql spoof.sql v1 v2" {
 		t.Fatalf("files: %s", got)
 	}
 	if _, err := os.Stat("testcase-out.txt"); err == nil {

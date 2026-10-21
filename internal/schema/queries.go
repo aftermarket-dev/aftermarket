@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -36,24 +37,37 @@ func words(sql string) []string {
 // its output describes the plan, which differs between schemas.
 func IsRead(sql string) bool {
 	toks, _ := sqlitecli.Lex(sql)
-	first := ""
+	var sig []sqlitecli.Token
 	for _, t := range toks {
 		if t.Significant() {
-			first = t.Upper()
-			break
+			sig = append(sig, t)
 		}
 	}
-	switch first {
+	if len(sig) == 0 {
+		return false
+	}
+	switch sig[0].Upper() {
 	case "SELECT", "VALUES":
 		return true
 	case "WITH":
-		for _, w := range words(sql) {
-			switch w {
-			case "INSERT", "UPDATE", "DELETE", "REPLACE":
+		// The main statement is the first statement keyword outside the
+		// common table expressions' parentheses; replace( is a function.
+		for i, t := range sig {
+			if t.Kind != sqlitecli.Word || t.Depth != 0 {
+				continue
+			}
+			switch t.Upper() {
+			case "SELECT", "VALUES":
+				return true
+			case "INSERT", "UPDATE", "DELETE":
+				return false
+			case "REPLACE":
+				if i+1 < len(sig) && sig[i+1].Kind == sqlitecli.Open {
+					continue
+				}
 				return false
 			}
 		}
-		return true
 	}
 	return false
 }
@@ -134,7 +148,11 @@ func Compare(ctx context.Context, r *sqlitecli.Runner, oldSrc, newSrc sqlitecli.
 		if len(want) == 0 && len(got) == 0 {
 			a, errA := columnNames(ctx, r, oldSrc, "", s.SQL)
 			b, errB := columnNames(ctx, r, newSrc, setup, s.SQL)
-			if errA == nil && errB == nil && !slices.Equal(a, b) {
+			if errA != nil || errB != nil {
+				res.Problem = "neither side gives rows, and the column names can't be compared: " + message(errors.Join(errA, errB))
+				return res
+			}
+			if !slices.Equal(a, b) {
 				res.Problem = fmt.Sprintf("the column names differ: old %s, new %s", strings.Join(a, ", "), strings.Join(b, ", "))
 				return res
 			}
