@@ -101,9 +101,9 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		httpx.WriteHealth(w)
 		return
 	}
-	// Work on a copy: the server checks its own request's body when it
-	// decides whether to reuse the connection.
-	req = req.WithContext(req.Context())
+	// From here on, work on the watched copy (see httpx.WatchBody).
+	req, done := httpx.WatchBody(w, req, r.opts.Config.UpstreamTimeout)
+	defer done()
 	ex := &exchange{
 		id:     r.reqID.Add(1),
 		method: req.Method,
@@ -136,9 +136,7 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			req.Body = ex.reqTap
 		}
 	}
-	out, done := httpx.ForwardBody(w, req.WithContext(context.WithValue(req.Context(), ctxKey{}, ex)), r.opts.Config.UpstreamTimeout)
-	defer done()
-	r.rp.ServeHTTP(w, out)
+	r.rp.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), ctxKey{}, ex)))
 }
 
 func (r *Recorder) rewrite(pr *httputil.ProxyRequest) {
@@ -186,10 +184,7 @@ func (r *Recorder) modifyResponse(resp *http.Response) error {
 }
 
 func (r *Recorder) errorHandler(w http.ResponseWriter, req *http.Request, err error) {
-	status, reason, answer := httpx.ForwardError(w, req, err)
-	if !answer {
-		return // the client went away; nobody to answer
-	}
+	status, reason := httpx.ForwardError(w, req, err)
 	if ex, _ := req.Context().Value(ctxKey{}).(*exchange); ex != nil {
 		r.opts.Audit.Write(audit.Event{
 			Event:     audit.UpstreamError,

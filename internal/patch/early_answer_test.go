@@ -93,3 +93,21 @@ func TestSlowBodyARuleReads(t *testing.T) {
 		t.Fatalf("upstream got %s", b)
 	}
 }
+
+// Ordinary requests keep their connection, matched by a rule or not.
+func TestKeepAliveWithBodies(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.ReadAll(r.Body) }))
+	defer up.Close()
+	h := startProxy(t, strings.TrimPrefix(requestRules, "\n"), up.URL, false)
+	tk.CheckKeepAlive(t, h.proxyURL,
+		"POST /orders HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"qty\":3}",
+		"POST /other HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello",
+		"POST /other HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n")
+}
+
+// See CheckOddClients.
+func TestOddClients(t *testing.T) {
+	tk.CheckOddClients(t, func(up string) string {
+		return startProxy(t, "limits: {upstream_timeout: 300ms}\n"+strings.TrimPrefix(neverMatches, "\n"), up, false).proxyURL
+	})
+}

@@ -122,9 +122,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteHealth(w)
 		return
 	}
-	// Work on a copy: the server checks its own request's body when it
-	// decides whether to reuse the connection.
-	r = r.WithContext(r.Context())
+	// From here on, work on the watched copy (see httpx.WatchBody).
+	r, done := httpx.WatchBody(w, r, p.opts.Config.UpstreamTimeout)
+	defer done()
 	pl, answered := p.plan(w, r)
 	if answered {
 		return
@@ -132,9 +132,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if pl != nil {
 		r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, pl))
 	}
-	out, done := httpx.ForwardBody(w, r, p.opts.Config.UpstreamTimeout)
-	defer done()
-	p.rp.ServeHTTP(w, out)
+	if pl != nil && !p.opts.DryRun && (pl.dropBody || (pl.bodySet && !pl.fromBody)) {
+		// The old body isn't forwarded: read it off here, so the
+		// connection can be used again.
+		if err := httpx.DrainBody(r, p.opts.Config.MaxBody); err != nil {
+			p.skip(pl, err.Error())
+			httpx.WriteRequestTimeout(w)
+			return
+		}
+	}
+	p.rp.ServeHTTP(w, r)
 }
 
 // skip records why a matched request passes through unchanged. The plan is
@@ -207,7 +214,7 @@ func (p *Proxy) plan(w http.ResponseWriter, r *http.Request) (*plan, bool) {
 			case r.Body == nil || r.Body == http.NoBody:
 				reason = "request has no body"
 			default:
-				if err := httpx.BufferRequestBody(w, r, p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout); err != nil {
+				if err := httpx.BufferRequestBody(r, p.opts.Config.MaxBody); err != nil {
 					p.skip(pl, err.Error())
 					httpx.WriteRequestTimeout(w)
 					return pl, true
@@ -546,10 +553,7 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 
 // errorHandler answers when the upstream cannot be reached in time.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
-	status, reason, answer := httpx.ForwardError(w, r, err)
-	if !answer {
-		return // the client went away; nobody to answer
-	}
+	status, reason := httpx.ForwardError(w, r, err)
 	if pl, _ := r.Context().Value(ctxKey{}).(*plan); pl != nil {
 		// Matched requests, translated or skipped, log the pattern.
 		p.opts.Audit.Write(audit.Event{

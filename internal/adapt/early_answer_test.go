@@ -103,3 +103,65 @@ func TestSlowBodyATemplateReads(t *testing.T) {
 		t.Fatalf("slow body: %v %v", resp, err)
 	}
 }
+
+const bodyEndpoints = `
+version: 1
+limits: {upstream_timeout: 300ms, max_body: 16MiB}
+endpoints:
+  - id: thing
+    old: POST /api/v1/thing?id={id}
+    new: POST /api/v2/things
+    request:
+      body: {id: $params.id}
+  - id: drop
+    old: POST /api/v1/drop
+    new: GET /api/v2/drop
+  - id: copy
+    old: POST /api/v1/copy
+    new: POST /api/v2/copy
+    request:
+      body: {all: $}
+`
+
+// A body adapt replaces or drops is read off by the proxy, so the
+// connection is used again; one it forwards keeps it too.
+func TestKeepAliveWithBodies(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.ReadAll(r.Body) }))
+	defer up.Close()
+	h := start(t, bodyEndpoints, up.URL, false)
+	tk.CheckKeepAlive(t, h.url,
+		"POST /api/v1/thing?id=7 HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"qty\":3}",
+		"POST /api/v1/drop HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"qty\":3}",
+		"POST /api/v1/copy HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"qty\":3}",
+		"POST /api/v1/unmatched HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello")
+}
+
+// A body one byte over max_body has been read to its end while buffering,
+// then forwarded as it came. An upstream that waits longer than
+// upstream_timeout before reading it must still get all of it, and the
+// client its real answer: no deadline may be left on the client's
+// connection while the copy in memory is sent.
+func TestBodyJustOverMaxToASlowUpstream(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2500 * time.Millisecond)
+		b, _ := io.ReadAll(r.Body)
+		fmt.Fprintf(w, "got %d", len(b))
+	}))
+	defer up.Close()
+	cfg := strings.Replace(bodyEndpoints, "upstream_timeout: 300ms", "upstream_timeout: 1s", 1)
+	h := start(t, cfg, up.URL, false)
+	for _, n := range []int{16<<20 + 1, 16<<20 + 2} {
+		body := bytes.Repeat([]byte("x"), n)
+		got := tk.Do(t, "POST", h.url+"/api/v1/copy", http.Header{"Content-Type": {"application/json"}}, body)
+		if got.Status != 200 || string(got.Body) != fmt.Sprintf("got %d", n) {
+			t.Fatalf("%d bytes: status %d, body %q", n, got.Status, got.Body)
+		}
+	}
+}
+
+// See CheckOddClients.
+func TestOddClients(t *testing.T) {
+	tk.CheckOddClients(t, func(up string) string {
+		return start(t, "limits: {upstream_timeout: 300ms}\n"+exampleConfig(t), up, false).url
+	})
+}

@@ -94,9 +94,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteHealth(w)
 		return
 	}
-	// Work on a copy: the server checks its own request's body when it
-	// decides whether to reuse the connection.
-	r = r.WithContext(r.Context())
+	// From here on, work on the watched copy (see httpx.WatchBody).
+	r, done := httpx.WatchBody(w, r, p.opts.Config.UpstreamTimeout)
+	defer done()
 	st := &state{
 		id:       p.reqID.Add(1),
 		method:   r.Method,
@@ -130,7 +130,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !rule.Request.HasBodyOps() || !httpx.IsJSON(r.Header.Get("Content-Type")) {
 			continue
 		}
-		if err := httpx.BufferRequestBody(w, r, p.opts.Config.MaxBody, p.opts.Config.UpstreamTimeout); err != nil {
+		if err := httpx.BufferRequestBody(r, p.opts.Config.MaxBody); err != nil {
 			for _, rr := range st.reqRules {
 				p.event(st, rr, "request", audit.Skipped, 0, nil, nil, err.Error())
 			}
@@ -140,9 +140,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 	ctx := context.WithValue(r.Context(), ctxKey{}, st)
-	out, done := httpx.ForwardBody(w, r.WithContext(ctx), p.opts.Config.UpstreamTimeout)
-	defer done()
-	p.rp.ServeHTTP(w, out)
+	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }
 
 func (p *Proxy) event(st *state, rule *rules.Rule, phase, kind string, status int, applied, notApplied []string, reason string) {
@@ -407,10 +405,7 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 // errorHandler answers when the upstream cannot be reached in time.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	st, _ := r.Context().Value(ctxKey{}).(*state)
-	status, reason, answer := httpx.ForwardError(w, r, err)
-	if !answer {
-		return // the client went away; nobody to answer
-	}
+	status, reason := httpx.ForwardError(w, r, err)
 	if st != nil {
 		p.opts.Audit.Write(audit.Event{
 			Event:     audit.UpstreamError,

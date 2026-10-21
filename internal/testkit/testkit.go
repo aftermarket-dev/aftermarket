@@ -474,10 +474,17 @@ func CheckEarlyAnswerConnections(t testing.TB, start func(upstream string) strin
 			conn.Close()
 			t.Fatalf("%s: status %d, body %q, close %v; want the whole early answer, closing the connection", c.name, resp.StatusCode, got, resp.Close)
 		}
+		sent := time.Now()
 		io.WriteString(conn, "GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n")
 		if extra, err := http.ReadResponse(br, nil); err == nil {
 			conn.Close()
 			t.Fatalf("%s: bytes inside the announced body were answered as a new request (%d)", c.name, extra.StatusCode)
+		}
+		if c.body == "" && time.Since(sent) > 250*time.Millisecond {
+			// No 100 Continue went out, so no body is coming: no reason to
+			// wait for one.
+			conn.Close()
+			t.Fatalf("%s: the connection was held %v after the answer", c.name, time.Since(sent))
 		}
 		conn.Close()
 	}
@@ -502,5 +509,111 @@ func CheckEarlyAnswerConnections(t testing.TB, start func(upstream string) strin
 	}
 	if _, err := br.ReadByte(); err != io.EOF {
 		t.Fatalf("upstream down: the connection stayed open: %v", err)
+	}
+}
+
+// CheckKeepAlive sends each raw request twice on one connection and fails
+// unless every answer arrives without closing it: ordinary traffic must
+// keep its connection.
+func CheckKeepAlive(t testing.TB, proxyURL string, reqs ...string) {
+	t.Helper()
+	for _, req := range reqs {
+		conn, err := net.Dial("tcp", strings.TrimPrefix(proxyURL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		br := bufio.NewReader(conn)
+		for i := 0; i < 2; i++ {
+			io.WriteString(conn, req)
+			resp, err := http.ReadResponse(br, nil)
+			if err != nil {
+				conn.Close()
+				t.Fatalf("%q, request %d on one connection: %v", strings.SplitN(req, "\r\n", 2)[0], i+1, err)
+			}
+			io.Copy(io.Discard, resp.Body)
+			if resp.Close {
+				conn.Close()
+				t.Fatalf("%q, request %d: status %d closed the connection", strings.SplitN(req, "\r\n", 2)[0], i+1, resp.StatusCode)
+			}
+		}
+		conn.Close()
+	}
+}
+
+// CheckOddClients covers clients and upstreams at the edges. start must
+// return the URL of a proxy for the given upstream, with upstream_timeout
+// set to 300ms.
+//   - A client that sends its request and then closes its sending side
+//     still gets the real answer.
+//   - A long answer streamed after the body has ended arrives whole, though
+//     it takes longer than upstream_timeout.
+//   - An upstream that switches protocols (101) before the body has ended
+//     gets its switch through.
+func CheckOddClients(t testing.TB, start func(upstream string) string) {
+	t.Helper()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		if r.URL.Path == "/long" {
+			for i := 0; i < 10; i++ {
+				fmt.Fprintf(w, "line %d\n", i)
+				w.(http.Flusher).Flush()
+				time.Sleep(100 * time.Millisecond)
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+		w.Write([]byte("real"))
+	}))
+	defer up.Close()
+	proxy := strings.TrimPrefix(start(up.URL), "http://")
+
+	conn, err := net.Dial("tcp", proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(conn, "POST /half HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello")
+	conn.(*net.TCPConn).CloseWrite()
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("half-closed client: %v", err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	conn.Close()
+	if resp.StatusCode != 200 || string(got) != "real" {
+		t.Fatalf("half-closed client: status %d, body %q; want the real answer", resp.StatusCode, got)
+	}
+
+	long := Do(t, "POST", "http://"+proxy+"/long", nil, []byte("hello"))
+	if long.Status != 200 || strings.Count(string(long.Body), "\n") != 10 {
+		t.Fatalf("long answer after the body: status %d, %q", long.Status, long.Body)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		bufio.NewReader(c).ReadString('\n')
+		io.WriteString(c, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n")
+		time.Sleep(time.Second)
+	}()
+	conn, err = net.Dial("tcp", strings.TrimPrefix(start("http://"+ln.Addr().String()), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(conn, "POST /up HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: test\r\nContent-Length: 100000\r\n\r\n"+strings.Repeat("a", 1000))
+	resp, err = http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("101 before the body ended: %v %v", resp, err)
 	}
 }

@@ -1,6 +1,8 @@
 package record_test
 
 import (
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
@@ -41,6 +43,23 @@ func TestStalledAndSlowBodies(t *testing.T) {
 // See CheckEarlyAnswerConnections in testkit.
 func TestEarlyAnswerConnections(t *testing.T) {
 	tk.CheckEarlyAnswerConnections(t, func(up string) string {
+		return start(t, "limits: {upstream_timeout: 300ms}\n", up).url
+	})
+}
+
+// Ordinary requests keep their connection while being recorded.
+func TestKeepAliveWithBodies(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.ReadAll(r.Body) }))
+	defer up.Close()
+	h := start(t, "", up.URL)
+	tk.CheckKeepAlive(t, h.url,
+		"POST /a HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 9\r\n\r\n{\"qty\":3}",
+		"POST /b HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n")
+}
+
+// See CheckOddClients.
+func TestOddClients(t *testing.T) {
+	tk.CheckOddClients(t, func(up string) string {
 		return start(t, "limits: {upstream_timeout: 300ms}\n", up).url
 	})
 }
