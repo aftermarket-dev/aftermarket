@@ -119,7 +119,8 @@ AfterGuard (needs a written threat model first). Afterlife and AfterTrace stay r
 
 - Oct 21 2026: 0.5.0 released and verified (all archives, SHA256SUMS, latest links; the downloaded binary ran hook check, hook test and a live loop with the example receiver and sqlite3: three signed events, a quiet run sending nothing, no token reaching the receiver, and an event held through a receiver outage and delivered after). That live run showed queued events went out indented after a restart (valid signature, different bytes); 0.5.1 compacts them on load, and a state file with a queued event missing its body is refused. Short independent review of the patch found nothing blocking. 333 tests recorded. Version raised to 0.5.1 for the automated release.
 
+- Oct 21 2026: 0.5.1 released and verified (all archives, SHA256SUMS, latest links; the downloaded binary ran the example with sqlite3 and the receiver: three signed events, a quiet run, an event held through an outage and delivered compact). Site: AfterHook reference page (/hook-reference/), quick start part five, use case, roadmap, concepts, about, home, download and architecture pages, release, testing and case study posts; hero now 333 tests and "Six tools are out". softdevstudio.com note published.
+
 ## Next
 
-1. 0.5.0 AfterHook, as approved above.
-2. After it: AfterGuard, TOML for AfterConfig or something else, decided with the owner; nothing is started until then.
+AfterHook is done. What comes next (AfterGuard, TOML for AfterConfig or something else) is decided with the owner; nothing is started until then.
