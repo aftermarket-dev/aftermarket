@@ -21,7 +21,7 @@ const (
 	WouldChange   = "would_change"   // dry run: the rule would have changed traffic
 	Skipped       = "skipped"        // the rule matched but could not be applied safely
 	Unchanged     = "unchanged"      // the rule matched but nothing needed changing
-	UpstreamError = "upstream_error" // the upstream failed; the proxy answered itself
+	UpstreamError = "upstream_error" // forwarding failed (the upstream, or the client's body: 400, 408); the proxy answered itself
 	Recorded      = "recorded"       // record: the exchange was written to the fixture file
 )
 

@@ -28,7 +28,7 @@ Unknown keys are errors, so a typo never fails silently. `aftermarket patch chec
 | `max_body` | `1MiB` | A byte count, or a number with `B`, `KB`, `MB`, `GB` (powers of 1000) or `KiB`, `MiB`, `GiB` (powers of 1024). At most `1GiB`. |
 | `upstream_timeout` | `30s` | A Go duration such as `500ms`, `30s` or `2m`. |
 
-A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`. The same happens when a response body that a rule needs to change doesn't arrive in full within `upstream_timeout` after the headers, except in a dry run, which waits as long as it takes. A request body may arrive slowly, but each part must come within `upstream_timeout` of the last, whether a rule reads it or it is streamed through. A client that stalls mid-body for longer gets `408` and its connection is closed. When the upstream answers, or fails, before the client has sent its whole body, the answer closes the connection. A client that closes its sending side after its request still gets the answer, if it comes within `upstream_timeout`; when a client goes away, the upstream call is given up that long after. A body that breaks off before its announced length gets `400` and is never changed or recorded as if it were whole.
+A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`. The same happens when a response body that a rule needs to change doesn't arrive in full within `upstream_timeout` after the headers, except in a dry run, which waits as long as it takes. A request body may arrive slowly, but each part must come within `upstream_timeout` of the last, whether a rule reads it or it is streamed through. A client that stalls mid-body for longer gets `408` and its connection is closed. When the upstream answers, or fails, before the client has sent its whole body, the answer closes the connection. A client that closes its sending side after its request still gets the answer, if the whole answer arrives within `upstream_timeout` of that; when a client goes away, the upstream call is given up that long after. A body that breaks off before its announced length gets `400` and is never changed or recorded as if it were whole.
 
 ### when
 
@@ -118,7 +118,7 @@ One JSON object per line.
 | Field | Meaning |
 | --- | --- |
 | `time` | UTC timestamp |
-| `event` | `changed` (something changed), `would_change` (the same, in a dry run), `unchanged` (matched, nothing to do), `skipped` (matched, but nothing could be applied safely) or `upstream_error` |
+| `event` | `changed` (something changed), `would_change` (the same, in a dry run), `unchanged` (matched, nothing to do), `skipped` (matched, but nothing could be applied safely) or `upstream_error` (forwarding failed and the proxy answered itself: the upstream was down or slow, or the client's body stalled, `408`, or broke off, `400`; `reason` says which) |
 | `request` | A number shared by all events for one request |
 | `rule`, `phase` | Which rule, and whether it ran on the `request` or `response` |
 | `method`, `path`, `query_keys`, `status` | What the traffic was. `path` is the path the client sent. |

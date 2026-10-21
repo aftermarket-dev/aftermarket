@@ -466,14 +466,18 @@ func WatchBody(w http.ResponseWriter, r *http.Request, idle time.Duration) (out 
 	ctx, cancelNow := context.WithCancel(context.WithoutCancel(r.Context()))
 	var graceMu sync.Mutex
 	var grace *time.Timer
+	stopped := false
 	stopGrace := context.AfterFunc(r.Context(), func() {
 		graceMu.Lock()
-		grace = time.AfterFunc(idle, cancelNow)
+		if !stopped {
+			grace = time.AfterFunc(idle, cancelNow)
+		}
 		graceMu.Unlock()
 	})
 	cancel := func() {
 		stopGrace()
 		graceMu.Lock()
+		stopped = true
 		if grace != nil {
 			grace.Stop()
 		}
@@ -505,6 +509,7 @@ func WatchBody(w http.ResponseWriter, r *http.Request, idle time.Duration) (out 
 			until := time.Now().Add(b.idle)
 			b.mu.Lock()
 			broken := b.err != nil
+			b.closing = true // from here on the deadline is done's to set
 			b.mu.Unlock()
 			if broken || (b.expect && !readAny) {
 				// The body stalled or broke off, or no 100 Continue went out
@@ -586,6 +591,7 @@ type progressBody struct {
 	stalled     bool
 	err         error // the first read error, returned from then on
 	upgraded    bool
+	closing     bool
 }
 
 func (b *progressBody) isEnded() bool {
@@ -599,7 +605,7 @@ func (b *progressBody) isEnded() bool {
 func (b *progressBody) deadline(t time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.handlerDone && !b.ended && !b.upgraded {
+	if !b.handlerDone && !b.ended && !b.upgraded && !b.closing {
 		_ = b.ctl.SetReadDeadline(t)
 	}
 }
