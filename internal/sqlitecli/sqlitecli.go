@@ -177,7 +177,9 @@ func (r *Runner) run(ctx context.Context, src Source, parts []part) ([]byte, err
 		args = append(args, "-readonly", abs)
 	}
 	for _, pt := range parts {
-		pt.text = strings.ReplaceAll(pt.text, "@SENTINEL@", sentinel)
+		if pt.name == "" {
+			pt.text = strings.ReplaceAll(pt.text, "@SENTINEL@", sentinel)
+		}
 		if err := add(pt); err != nil {
 			return nil, err
 		}

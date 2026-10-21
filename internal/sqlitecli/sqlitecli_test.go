@@ -213,6 +213,10 @@ func TestNothingIsWrittenThroughTheShell(t *testing.T) {
 	if err != nil || len(rows) != 1 || Str(rows[0].Get("m")) != "@@aftermarket-output@@" {
 		t.Fatalf("%v %v", rows, err)
 	}
+	rows, err = r.Query(ctx, Source{Path: victim}, "", "select '@SENTINEL@' as m")
+	if err != nil || len(rows) != 1 || Str(rows[0].Get("m")) != "@SENTINEL@" {
+		t.Fatalf("the placeholder in user SQL was replaced: %v %v", rows, err)
+	}
 	if _, err := os.Stat(trace); err == nil {
 		t.Fatal("a trace file was written")
 	}
