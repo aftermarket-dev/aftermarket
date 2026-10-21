@@ -201,9 +201,9 @@ func TestTOMLReview_F11_FixtureCantTellDateFromString(t *testing.T) {
 
 func ptr(s string) *string { return &s }
 
-// The random test above builds its bases with the writer; this one starts
-// from a file written by hand in every spelling TOML allows, and makes one
-// random change at a time. Each result must hold exactly the intended
+// The random test builds its bases with the writer; this one starts
+// from a file written by hand in every spelling TOML allows, and makes 22
+// changes, one at a time. Each result must hold exactly the intended
 // values, keep every line it didn't touch, and keep the file's line endings
 // and missing final newline.
 func TestTOMLReviewHandWrittenRandom(t *testing.T) {
