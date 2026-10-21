@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -20,6 +21,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:9900", "address to listen on")
 	flag.Parse()
 	secret := os.Getenv("HOOK_SECRET")
+	var mu sync.Mutex // handlers run concurrently
 	seen := map[string]bool{}
 	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -39,6 +41,8 @@ func main() {
 			}
 		}
 		id := r.Header.Get("X-Aftermarket-Event")
+		mu.Lock()
+		defer mu.Unlock()
 		if seen[id] {
 			fmt.Printf("repeat of %s, ignored\n", id) // at-least-once delivery
 			return

@@ -14,8 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/config"
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
@@ -30,6 +32,7 @@ type Snapshot struct {
 	Status  int                 `json:"status,omitempty"`  // http status or command exit code
 	Content string              `json:"content,omitempty"` // text kept for field and line changes
 	Files   map[string]FileInfo `json:"files,omitempty"`   // folder
+	Busy    bool                `json:"-"`                 // a folder file was still being written
 }
 
 // FileInfo is one file in a folder snapshot.
@@ -191,30 +194,49 @@ func (h *Hook) lookFolder(s *Source) (Snapshot, error) {
 	// Something is new or different: wait, and check that nothing is still
 	// being written before hashing.
 	h.sleep(h.cfg.Settle)
+	busy := false
 	for name, fi := range snap.Files {
 		if fi.Hash != "" {
 			continue
 		}
 		p := filepath.Join(s.Path, filepath.FromSlash(name))
-		again, err := os.Stat(p)
-		if err != nil || again.Size() != fi.Size || again.ModTime().UnixNano() != fi.ModTime {
-			return Snapshot{}, errNotReady
+		hash, ok := hashSettled(p, fi)
+		if !ok {
+			// Still being written: keep what was there before, or leave it out
+			// for now, and report the rest of the folder.
+			if old, had := prev[name]; had {
+				snap.Files[name] = old
+			} else {
+				delete(snap.Files, name)
+			}
+			busy = true
+			continue
 		}
-		f, err := os.Open(p)
-		if err != nil {
-			return Snapshot{}, errNotReady
-		}
-		sum := sha256.New()
-		_, err = io.Copy(sum, f)
-		f.Close()
-		if err != nil {
-			return Snapshot{}, errNotReady
-		}
-		fi.Hash = hex.EncodeToString(sum.Sum(nil))
+		fi.Hash = hash
 		snap.Files[name] = fi
 	}
 	snap.Hash = folderHash(snap.Files)
+	snap.Busy = busy
 	return snap, nil
+}
+
+// hashSettled hashes a file that kept its size and modification time across
+// the settle wait, and reports false for one still being written.
+func hashSettled(p string, fi FileInfo) (string, bool) {
+	again, err := os.Stat(p)
+	if err != nil || again.Size() != fi.Size || again.ModTime().UnixNano() != fi.ModTime {
+		return "", false
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return "", false
+	}
+	return hex.EncodeToString(sum.Sum(nil)), true
 }
 
 func folderHash(files map[string]FileInfo) string {
@@ -260,10 +282,14 @@ func (h *Hook) lookCommand(ctx context.Context, s *Source) (Snapshot, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.Run[0], s.Run[1:]...)
 	cmd.Dir = s.Dir
+	// A child that keeps stdout open must not hold the check past its
+	// timeout: the whole process group is killed, and the wait gives up.
+	ownGroup(cmd)
+	cmd.WaitDelay = time.Second
 	var out bytes.Buffer
 	cmd.Stdout = &limitWriter{w: &out, n: h.cfg.MaxBody}
 	err := cmd.Run()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || errors.Is(err, exec.ErrWaitDelay) {
 		return Snapshot{}, errors.New("the command did not finish within its timeout")
 	}
 	var exit *exec.ExitError
@@ -349,16 +375,36 @@ func diff(s *Source, a, b Snapshot) []Change {
 	if s.Kind == "http" || s.Kind == "command" {
 		format = config.JSON
 	}
-	if format != "" {
-		ta, errA := config.ParseTree(format, []byte(a.Content))
-		tb, errB := config.ParseTree(format, []byte(b.Content))
-		if errA == nil && errB == nil {
-			var fields []Change
-			fieldDiff(nil, ta, tb, s.Ignore, &fields)
-			return append(out, fields...)
-		}
+	if format == "" {
+		return append(out, lineDiff(a.Content, b.Content)...)
+	}
+	ta, errA := parseContent(s, format, a.Content)
+	tb, errB := parseContent(s, format, b.Content)
+	switch {
+	case errA == nil && errB == nil:
+		var fields []Change
+		fieldDiff(nil, ta, tb, s.Ignore, &fields)
+		return append(out, limit(fields, "changes")...)
+	case errA == nil || errB == nil:
+		// One side reads and the other doesn't, such as JSON that turned into
+		// an error page. Its lines could carry secrets the field comparison
+		// would have hidden, so only the size and hash are reported.
+		return append(out, Change{Op: "changed", Path: "", Old: summary(a), New: summary(b)})
 	}
 	return append(out, lineDiff(a.Content, b.Content)...)
+}
+
+// parseContent reads a source's content as a tree. Empty output reads as
+// nothing at all: an empty list for a command (sqlite3 prints nothing for no
+// rows), null for an HTTP answer.
+func parseContent(s *Source, format, content string) (any, error) {
+	if strings.TrimSpace(content) == "" && (s.Kind == "http" || s.Kind == "command") {
+		if s.Kind == "command" {
+			return []any{}, nil
+		}
+		return nil, nil
+	}
+	return config.ParseTree(format, []byte(content))
 }
 
 func summary(s Snapshot) any {
@@ -373,6 +419,22 @@ func fileSummary(f FileInfo) any {
 }
 
 const maxChanges = 100
+
+// hardCap bounds the work on very different trees; past maxChanges only the
+// count matters.
+const hardCap = 100000
+
+// limit keeps the first maxChanges changes and says how many more there were.
+func limit(out []Change, what string) []Change {
+	if len(out) <= maxChanges {
+		return out
+	}
+	more := fmt.Sprintf("and %d more %s", len(out)-maxChanges, what)
+	if len(out) >= hardCap {
+		more = fmt.Sprintf("and more than %d more %s", hardCap-maxChanges, what)
+	}
+	return append(out[:maxChanges:maxChanges], Change{Op: "changed", Path: "", New: more})
+}
 
 func ignored(p ojson.Path, ignore []ojson.Path) bool {
 	for _, ig := range ignore {
@@ -395,7 +457,7 @@ func ignored(p ojson.Path, ignore []ojson.Path) bool {
 
 // fieldDiff lists field changes between two trees, secrets redacted.
 func fieldDiff(p ojson.Path, a, b any, ignore []ojson.Path, out *[]Change) {
-	if len(*out) >= maxChanges || ignored(p, ignore) {
+	if len(*out) >= hardCap || ignored(p, ignore) {
 		return
 	}
 	ao, aok := a.(*ojson.Object)
@@ -436,7 +498,7 @@ func fieldDiff(p ojson.Path, a, b any, ignore []ojson.Path, out *[]Change) {
 			default:
 				fieldDiff(cp, al[i], bl[i], ignore, out)
 			}
-			if len(*out) >= maxChanges {
+			if len(*out) >= hardCap {
 				return
 			}
 		}
@@ -513,19 +575,35 @@ func lineDiff(a, b string) []Change {
 	for _, l := range al {
 		if count[l] > 0 {
 			count[l]--
-			out = append(out, Change{Op: "removed", Path: "line", Old: config.MaskURLs(l)})
+			out = append(out, Change{Op: "removed", Path: "line", Old: redactLine(l)})
 		}
 	}
 	for _, l := range added {
-		out = append(out, Change{Op: "added", Path: "line", New: config.MaskURLs(l)})
+		out = append(out, Change{Op: "added", Path: "line", New: redactLine(l)})
 	}
-	if len(out) > maxChanges {
-		out = append(out[:maxChanges], Change{Op: "changed", Path: "line", New: fmt.Sprintf("and %d more lines", len(out)-maxChanges)})
-	}
+	out = limit(out, "lines")
 	if len(out) == 0 { // same lines, different order or line endings
 		out = append(out, Change{Op: "changed", Path: "", Old: map[string]any{"size": len(a)}, New: map[string]any{"size": len(b)}})
 	}
 	return out
+}
+
+// pairRE finds key/value pairs in a line of text: `key = value`, `key: value`,
+// `"key": "value"`, `key=value&` in a query string, and so on.
+var pairRE = regexp.MustCompile(`(["']?)([A-Za-z0-9_.\-]+)(["']?)(\s*[:=]\s*)("(?:[^"\\]|\\.)*"|'[^']*'|[^\s,;&}\]]+)`)
+
+// redactLine hides the values of secret-looking keys in a line of text, and
+// passwords in URLs, since a line diff has no structure to go by.
+func redactLine(l string) string {
+	l = pairRE.ReplaceAllStringFunc(l, func(m string) string {
+		sm := pairRE.FindStringSubmatch(m)
+		key := strings.TrimPrefix(sm[2], "export ")
+		if !config.SecretPath(ojson.Path{key}) {
+			return m
+		}
+		return sm[1] + sm[2] + sm[3] + sm[4] + "REDACTED"
+	})
+	return config.MaskURLs(l)
 }
 
 func splitLines(s string) []string {

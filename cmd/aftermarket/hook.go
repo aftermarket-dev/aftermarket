@@ -57,7 +57,7 @@ func runHook(args []string, stdout, stderr io.Writer) int {
 			what := s.Path
 			switch s.Kind {
 			case "http":
-				what = s.URL.Redacted()
+				what = hook.DisplayURL(s.URL)
 			case "command":
 				what = s.Run[0]
 			}
@@ -73,7 +73,7 @@ func runHook(args []string, stdout, stderr io.Writer) int {
 					missing++
 				}
 			}
-			fmt.Fprintf(stdout, "  webhook %s (line %d): %s, %s\n", w.ID, w.Line, w.URL.Redacted(), sig)
+			fmt.Fprintf(stdout, "  webhook %s (line %d): %s, %s\n", w.ID, w.Line, hook.DisplayURL(w.URL), sig)
 		}
 		if missing > 0 {
 			fmt.Fprintln(stdout, "ok, but set the missing secrets before hook run")

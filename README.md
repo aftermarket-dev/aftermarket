@@ -198,7 +198,7 @@ Each change becomes one signed POST, listed by field:
             {"op":"added","path":"1","new":{"id":1002,"status":"open","total":12}}]}
 ```
 
-The first check only sets a baseline. A file rewritten with the same content, or a change to an ignored field, sends nothing, and a file still being written waits for the next check. While the receiver is down, events wait in the state file and are retried until delivered, in order, across restarts. The example is [`examples/legacy-app`](examples/legacy-app), with a receiver that checks signatures, and the full format is in [docs/hook.md](docs/hook.md).
+The first check only sets a baseline. A file rewritten with the same content, or a change to an ignored field, sends nothing. A file still being written waits for the next check, and one that disappears or shrinks by more than half is only reported when the next check sees the same. While the receiver is down, events wait in the state file and are retried until delivered, in order, across restarts. The example is [`examples/legacy-app`](examples/legacy-app), with a receiver that checks signatures, and the full format is in [docs/hook.md](docs/hook.md).
 
 ## Install
 
@@ -307,7 +307,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - adapt maps one old call to one new call. An old endpoint that needs several new calls (fan-out) isn't supported yet.
 - adapt doesn't rewrite `Location` headers or links inside bodies, so a redirect from the new API points at a new URL.
 - Captured parameters are always strings. A template that needs a number from the URL gets `"7"`, not `7`.
-- AfterHook checks on an interval instead of using the operating system's file notifications, so a change is seen within one interval (5 seconds by default). It watches SQLite through the `sqlite3` command, which must be installed.
+- AfterHook checks on an interval instead of using the operating system's file notifications, so a change is seen within one interval (5 seconds by default), and a removal within two. It watches SQLite through the `sqlite3` command, which must be installed. In a folder, a file rewritten with the same size and modification time isn't noticed.
 - AfterConfig doesn't read TOML yet, and doesn't keep comments when it writes YAML. The vendor's file keeps them.
 - Config files use a strict subset of YAML: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
 - One upstream per proxy. Run one proxy per service.

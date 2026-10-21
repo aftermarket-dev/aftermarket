@@ -465,6 +465,13 @@ func TestCommandSources(t *testing.T) {
 	if ev := e.round(t, h); len(ev) != 0 {
 		t.Fatal("a command that timed out gave an event")
 	}
+	// JSON turning into text is reported by size and hash only: its lines
+	// could carry what the field comparison would have hidden.
+	write("plain text\nline one\n")
+	ev = e.round(t, h)
+	if len(ev) != 1 || len(ev[0].Changes) != 1 || ev[0].Changes[0].Path != "" {
+		t.Fatalf("json to text: %+v", ev)
+	}
 	write("plain text\nline two\n")
 	ev = e.round(t, h)
 	if len(ev) != 1 || ev[0].Changes[len(ev[0].Changes)-1].New != "line two" {

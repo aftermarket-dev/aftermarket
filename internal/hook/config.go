@@ -375,7 +375,13 @@ func (l *loader) source(n *yamlite.Node, c *Config) *Source {
 				l.errf(p.KeyLine, "send_to must list webhook ids")
 				ok = false
 			}
-			s.SendTo = list
+			seen := map[string]bool{}
+			for _, id := range list {
+				if !seen[id] { // a webhook named twice still gets each event once
+					seen[id] = true
+					s.SendTo = append(s.SendTo, id)
+				}
+			}
 		case "ignore":
 			list, good := scalarList(p.Value)
 			if !good {
@@ -512,4 +518,18 @@ func scalarList(n *yamlite.Node) ([]string, bool) {
 		return out, true
 	}
 	return nil, false
+}
+
+// DisplayURL writes u for output people read: the scheme and host only, and
+// "/…" when there is more. Webhook URLs often carry their secret in the path
+// or the query, so neither is ever printed.
+func DisplayURL(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	out := u.Scheme + "://" + u.Host
+	if (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		out += "/…"
+	}
+	return out
 }

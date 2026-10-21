@@ -309,4 +309,10 @@ func TestHookCommands(t *testing.T) {
 	if code, out, _ := runCLI("hook", "run", "--config", filepath.Join(dir, "hook.yaml"), "--once", "--dry-run", "--log", ""); code != 0 || out != "" {
 		t.Fatalf("dry run with nothing changed: %d %q", code, out)
 	}
+	// check never prints a URL's path or query, where webhook secrets live.
+	os.WriteFile(filepath.Join(dir, "secret.yaml"), []byte("state: st2.json\nwebhooks:\n  - id: slack\n    url: https://hooks.slack.com/services/T000/B000/XXXXSECRET?token=abc\nsources:\n  - id: h\n    http: {url: \"https://user:pw@api.example.com/x?api_key=SECRET123\"}\n"), 0o644)
+	code, out, errs = runCLI("hook", "check", "--config", filepath.Join(dir, "secret.yaml"))
+	if code != 0 || strings.Contains(out, "SECRET") || strings.Contains(out, "token=") || strings.Contains(out, "user") || !strings.Contains(out, "https://hooks.slack.com/…") {
+		t.Fatalf("check printed a secret: %d %q %q", code, out, errs)
+	}
 }

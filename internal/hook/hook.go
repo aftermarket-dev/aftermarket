@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -43,6 +44,7 @@ type State struct {
 // has had.
 type SourceState struct {
 	Spec string   `json:"spec"` // the source's definition; a new one starts a new baseline
+	Base string   `json:"base"` // random, new with each baseline, so event ids never repeat across baselines
 	Seq  uint64   `json:"seq"`
 	Snap Snapshot `json:"snapshot"`
 }
@@ -78,12 +80,13 @@ type Hook struct {
 	now     func() time.Time
 	sleep   func(time.Duration)
 	nextAt  map[string]time.Time
+	confirm map[string]string // a removal or big shrink seen once, waiting for a second look
 	logMu   sync.Mutex
 }
 
 // New loads the state file and checks that every webhook's secret is set.
 func New(cfg *Config, opts Options) (*Hook, error) {
-	h := &Hook{cfg: cfg, opts: opts, now: opts.Now, sleep: opts.Sleep, client: opts.Client, secrets: map[string]string{}, nextAt: map[string]time.Time{}}
+	h := &Hook{cfg: cfg, opts: opts, now: opts.Now, sleep: opts.Sleep, client: opts.Client, secrets: map[string]string{}, nextAt: map[string]time.Time{}, confirm: map[string]string{}}
 	if h.now == nil {
 		h.now = time.Now
 	}
@@ -170,7 +173,20 @@ func (h *Hook) save() error {
 		os.Remove(name)
 		return err
 	}
+	// Make the rename itself durable where the system allows it.
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
 	return nil
+}
+
+func newBase() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b)
 }
 
 // logLine is one line of the log. It never holds values.
@@ -209,9 +225,10 @@ func spec(s *Source) string {
 }
 
 // eventID is derived from the change itself, so a change seen again after a
-// crash, before the state was saved, gets the same id.
-func eventID(source string, seq uint64, before, after string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s\x00%s", source, seq, before, after)))
+// crash, before the state was saved, gets the same id. The baseline's random
+// base keeps ids from repeating after a new baseline restarts the sequence.
+func eventID(source, base string, seq uint64, before, after string) string {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s", source, base, seq, before, after)))
 	return hex.EncodeToString(sum[:12])
 }
 
@@ -240,13 +257,29 @@ func (h *Hook) Poll(ctx context.Context) ([]Event, error) {
 			h.log(logLine{Event: "source_error", Source: s.ID, Reason: describe(err)})
 			continue
 		}
+		if snap.Busy {
+			h.log(logLine{Event: "not_ready", Source: s.ID, Reason: "a file in the folder is still being written; it is left out until it settles"})
+		}
 		st := h.state.Sources[s.ID]
 		if st == nil || st.Spec != spec(s) {
-			h.state.Sources[s.ID] = &SourceState{Spec: spec(s), Snap: snap}
+			h.state.Sources[s.ID] = &SourceState{Spec: spec(s), Base: newBase(), Snap: snap}
+			delete(h.confirm, s.ID)
 			dirty = true
 			h.log(logLine{Event: "baseline", Source: s.ID})
 			continue
 		}
+		if suspicious(s, st.Snap, snap) {
+			// A file that vanishes for a moment, or a structured file cut
+			// short, is only reported when the next check sees the same.
+			key := fmt.Sprint(snap.Exists, snap.Hash)
+			if h.confirm[s.ID] != key {
+				h.confirm[s.ID] = key
+				h.nextAt[s.ID] = now.Add(min(s.Interval, time.Second))
+				h.log(logLine{Event: "not_ready", Source: s.ID, Reason: "the source shrank or disappeared; checking again before reporting it"})
+				continue
+			}
+		}
+		delete(h.confirm, s.ID)
 		changes := diff(s, st.Snap, snap)
 		if len(changes) == 0 {
 			if st.Snap.Hash != snap.Hash || st.Snap.Exists != snap.Exists || st.Snap.Status != snap.Status {
@@ -259,18 +292,21 @@ func (h *Hook) Poll(ctx context.Context) ([]Event, error) {
 			continue
 		}
 		seq := st.Seq + 1
-		ev := Event{ID: eventID(s.ID, seq, st.Snap.Hash, snap.Hash), Source: s.ID, Kind: s.Kind, Sequence: seq,
+		ev := Event{ID: eventID(s.ID, st.Base, seq, st.Snap.Hash, snap.Hash), Source: s.ID, Kind: s.Kind, Sequence: seq,
 			Time: now.UTC().Format(time.RFC3339), Changes: changes}
 		events = append(events, ev)
 		if h.opts.DryRun {
+			// Nothing is saved or sent, but the run moves on, so each change
+			// is printed once.
 			if h.opts.Out != nil {
 				b, _ := json.Marshal(ev)
 				fmt.Fprintf(h.opts.Out, "%s\n", b)
 			}
+			st.Seq, st.Snap = seq, snap
 			continue
 		}
 		body, _ := json.Marshal(ev)
-		for _, w := range s.SendTo {
+		for _, w := range s.SendTo { // send_to holds each webhook once
 			h.state.Queue = append(h.state.Queue, &Delivery{Webhook: w, EventID: ev.ID, Body: body, NextAt: now})
 		}
 		st.Seq, st.Snap = seq, snap
@@ -292,11 +328,24 @@ func (h *Hook) Poll(ctx context.Context) ([]Event, error) {
 }
 
 // Deliver sends what is due, oldest first. Each webhook gets its events in
-// order: while the oldest one waits for a retry, the later ones wait too.
-func (h *Hook) Deliver(ctx context.Context) error {
+// order: while the oldest one waits for a retry, the later ones wait too. The
+// state file is saved once at the end; a crash before that only means some
+// events are sent again, which at-least-once delivery allows.
+func (h *Hook) Deliver(ctx context.Context) (err error) {
+	dirty := false
+	defer func() {
+		if dirty {
+			if serr := h.save(); serr != nil && err == nil {
+				err = fmt.Errorf("could not save the state file: %w", serr)
+			}
+		}
+	}()
 	blocked := map[string]bool{}
 	i := 0
 	for i < len(h.state.Queue) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		d := h.state.Queue[i]
 		if blocked[d.Webhook] || h.now().Before(d.NextAt) {
 			blocked[d.Webhook] = true
@@ -308,35 +357,33 @@ func (h *Hook) Deliver(ctx context.Context) error {
 			// The webhook was removed from the config; keep the event as dead.
 			h.dead(d, "the webhook is no longer in the config")
 			h.state.Queue = append(h.state.Queue[:i], h.state.Queue[i+1:]...)
-			if err := h.save(); err != nil {
-				return err
-			}
+			dirty = true
 			continue
 		}
-		d.Attempts++
-		status, err := h.send(ctx, w, d)
-		if err == nil {
-			h.log(logLine{Event: "delivered", Webhook: w.ID, EventID: d.EventID, Attempt: d.Attempts, Status: status})
-			h.state.Queue = append(h.state.Queue[:i], h.state.Queue[i+1:]...)
-		} else {
-			d.LastError = err.Error()
-			if h.cfg.MaxAttempts > 0 && d.Attempts >= h.cfg.MaxAttempts {
-				h.dead(d, d.LastError)
-				h.state.Queue = append(h.state.Queue[:i], h.state.Queue[i+1:]...)
-			} else {
-				wait := h.backoff(d.Attempts)
-				d.NextAt = h.now().Add(wait)
-				blocked[d.Webhook] = true
-				h.log(logLine{Event: "retry", Webhook: w.ID, EventID: d.EventID, Attempt: d.Attempts, Status: status, Reason: d.LastError, RetryIn: wait.String()})
-				i++
-			}
-		}
-		if err := h.save(); err != nil {
-			return fmt.Errorf("could not save the state file: %w", err)
-		}
-		if ctx.Err() != nil {
+		status, serr := h.send(ctx, w, d)
+		if serr != nil && ctx.Err() != nil {
+			// Stopped mid-send: this attempt doesn't count, and the event
+			// stays queued for the next run.
 			return ctx.Err()
 		}
+		d.Attempts++
+		dirty = true
+		if serr == nil {
+			h.log(logLine{Event: "delivered", Webhook: w.ID, EventID: d.EventID, Attempt: d.Attempts, Status: status})
+			h.state.Queue = append(h.state.Queue[:i], h.state.Queue[i+1:]...)
+			continue
+		}
+		d.LastError = serr.Error()
+		if h.cfg.MaxAttempts > 0 && d.Attempts >= h.cfg.MaxAttempts {
+			h.dead(d, d.LastError)
+			h.state.Queue = append(h.state.Queue[:i], h.state.Queue[i+1:]...)
+			continue
+		}
+		wait := h.backoff(d.Attempts)
+		d.NextAt = h.now().Add(wait)
+		blocked[d.Webhook] = true
+		h.log(logLine{Event: "retry", Webhook: w.ID, EventID: d.EventID, Attempt: d.Attempts, Status: status, Reason: d.LastError, RetryIn: wait.String()})
+		i++
 	}
 	return nil
 }
@@ -435,6 +482,16 @@ func describe(err error) string {
 	return "the source could not be read"
 }
 
+// suspicious says whether a change could be a moment in the middle of a
+// rewrite: a source that disappeared, or a structured file that lost more
+// than half its size.
+func suspicious(s *Source, a, b Snapshot) bool {
+	if a.Exists && !b.Exists {
+		return true
+	}
+	return s.Kind == "file" && s.Format != "" && a.Exists && b.Exists && b.Size*2 < a.Size
+}
+
 // Pending is how many deliveries are waiting.
 func (h *Hook) Pending() int { return len(h.state.Queue) }
 
@@ -468,7 +525,14 @@ func (h *Hook) untilNext() time.Duration {
 			next = t
 		}
 	}
+	// Only the oldest event of each webhook can be sent next; the ones
+	// behind it wait for it, whatever their own time says.
+	head := map[string]bool{}
 	for _, d := range h.state.Queue {
+		if head[d.Webhook] {
+			continue
+		}
+		head[d.Webhook] = true
 		if d.NextAt.Before(next) {
 			next = d.NextAt
 		}

@@ -158,6 +158,9 @@ func runTests() ([]testResult, error) {
 		return nil, err
 	}
 	var results []testResult
+	// Each test's output is kept until it ends, and printed when it fails,
+	// so a rare failure leaves its message behind.
+	output := map[string][]string{}
 	sc := bufio.NewScanner(out)
 	sc.Buffer(make([]byte, 1<<20), 1<<24)
 	for sc.Scan() {
@@ -166,11 +169,20 @@ func runTests() ([]testResult, error) {
 			Package string
 			Test    string
 			Elapsed float64
+			Output  string
 		}
 		if json.Unmarshal(sc.Bytes(), &ev) != nil || ev.Test == "" {
 			continue
 		}
+		key := ev.Package + " " + ev.Test
+		if ev.Action == "output" {
+			output[key] = append(output[key], ev.Output)
+		}
+		if ev.Action == "fail" {
+			fmt.Fprintf(os.Stderr, "FAIL %s\n%s", key, strings.Join(output[key], ""))
+		}
 		if ev.Action == "pass" || ev.Action == "fail" || ev.Action == "skip" {
+			delete(output, key)
 			results = append(results, testResult{
 				Package: strings.TrimPrefix(ev.Package, "github.com/aftermarket-dev/aftermarket/"),
 				Test:    ev.Test, Result: ev.Action, Seconds: ev.Elapsed,

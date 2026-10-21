@@ -185,6 +185,18 @@ jobs:
           [ ! -e smoke-11.json ]
           $PREFIX "$bin" hook check --config examples/legacy-app/hook.yaml
           $PREFIX "$bin" hook test --config examples/legacy-app/hook.yaml --fixture examples/legacy-app/fixture.yaml
+          # A one-shot run sets a baseline, then queues a change for a webhook
+          # that can't be reached, and keeps it for the next run.
+          mkdir hooksmoke
+          printf 'state: st.json\nsettle: 1ms\nwebhooks:\n  - id: w\n    url: http://127.0.0.1:1/x\nsources:\n  - id: s\n    file: {path: s.json}\n' > hooksmoke/hook.yaml
+          echo '{"a":1}' > hooksmoke/s.json
+          $PREFIX "$bin" hook run --config hooksmoke/hook.yaml --once --log hooksmoke/log.jsonl
+          echo '{"a":2}' > hooksmoke/s.json
+          $PREFIX "$bin" hook run --config hooksmoke/hook.yaml --once --log hooksmoke/log.jsonl
+          grep -q '"baseline"' hooksmoke/log.jsonl
+          grep -q '"changed"' hooksmoke/log.jsonl
+          grep -q '"retry"' hooksmoke/log.jsonl
+          grep -q '"event_id"' hooksmoke/st.json
           # The vendor's file is never written.
           if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --out examples/vendor-app/1.0/config.json; then exit 1; fi
 

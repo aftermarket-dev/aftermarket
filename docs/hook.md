@@ -10,10 +10,10 @@ aftermarket hook run   --config hook.yaml [--once] [--dry-run] [--log FILE|-]
 aftermarket hook test  --config hook.yaml --fixture fixture.yaml
 ```
 
-- **`check`** validates the config, lists the sources and webhooks, and says whether each webhook's signing secret is set.
+- **`check`** validates the config, lists the sources and webhooks, and says whether each webhook's signing secret is set. URLs show only their scheme and host, since webhook URLs often carry a secret in the path or query.
 - **`run`** checks each source on its interval and delivers events until stopped with Ctrl-C. When it stops it says how many events are still waiting; they are sent on the next run.
 - **`--once`** checks every source once, delivers what's due, and exits. It fits a cron job or a CI step.
-- **`--dry-run`** prints the events it finds as JSON lines instead of saving and sending them. The state file isn't touched.
+- **`--dry-run`** prints the events it finds as JSON lines instead of saving and sending them, each change once. The state file isn't touched.
 - **`--log`** writes the log as JSON lines: `-` for stderr (the default), a file name to append to, or empty for none. The log never holds values from your sources.
 - **`test`** runs before/after fixtures through the config's sources and compares the changes with what you expect.
 
@@ -42,7 +42,7 @@ webhooks:
 sources:
   - id: order-status             # required, unique
     file: {path: status.json}
-    ignore: [updated_at]         # optional; fields left out of comparisons
+    ignore: [updated_at]         # optional; fields left out of field-by-field comparisons
     interval: 5s                 # optional; overrides the global one
     send_to: [ops]               # optional; every webhook by default
 ```
@@ -69,7 +69,9 @@ Each source watches one thing.
   folder: {path: exports, pattern: "*.csv", recursive: false}
 ```
 
-Reports files added, changed or removed, with their size and SHA-256. `pattern` matches file names. Subfolders are included only with `recursive: true`. A file whose modification time changes but whose content doesn't gives no event.
+Reports files added, changed or removed, with their size and SHA-256. `pattern` matches file names. Subfolders are included only with `recursive: true`. Only regular files count; symbolic links are skipped. A file whose modification time changes but whose content doesn't gives no event.
+
+A file is hashed again only when its size or modification time changes. A rewrite that keeps both, such as `cp -p` or `rsync -t` copying in a file of the same size, isn't noticed.
 
 ### http
 
@@ -79,7 +81,7 @@ Reports files added, changed or removed, with their size and SHA-256. `pattern` 
   interval: 1m
 ```
 
-GETs the URL on each check. A change in status code is reported, and so is a change in the body: field by field when both bodies are JSON, line by line otherwise. A request that fails is logged and checked again next time, without an event.
+GETs the URL on each check. A change in status code is reported, and so is a change in the body: field by field when both bodies are JSON, and line by line when neither is. When one is JSON and the other isn't, such as an error page in place of the usual answer, the event gives only the size and SHA-256 of each, so nothing the field comparison would have hidden goes out. An empty body counts as `null`. A request that fails is logged and checked again next time, without an event.
 
 ### command
 
@@ -90,7 +92,7 @@ GETs the URL on each check. A change in status code is reported, and so is a cha
     timeout: 10s
 ```
 
-Runs the command without a shell, in the config file's folder, and compares its output: field by field when it's JSON, line by line otherwise. This is how AfterHook watches a SQLite database without a database driver. The `sqlite3` program must be installed where AfterHook runs, and `-json` gives output that can be compared row by row. A row that changes is reported by its position and field (`0.status`), and a new row at the end as added. A command that fails, or doesn't finish within `timeout`, is logged and tried again next time, without an event.
+Runs the command without a shell, in the config file's folder, and compares its output the same way as an HTTP body. Empty output counts as an empty list, since `sqlite3 -json` prints nothing when a query finds no rows. This is how AfterHook watches a SQLite database without a database driver. The `sqlite3` program must be installed where AfterHook runs, and `-json` gives output that can be compared row by row. A row that changes is reported by its position and field (`0.status`), and a new row at the end as added. A command that fails, or doesn't finish within `timeout`, is logged and tried again next time, without an event. On timeout the command and anything it started are stopped.
 
 ## The first check
 
@@ -101,8 +103,9 @@ The first time a source is checked, its current state becomes the baseline, and 
 A change is only reported when the source is complete:
 
 - A file is read twice, `settle` apart. If the two reads differ, it is still being written, and it's checked again next time.
-- A JSON, YAML or `.env` file that doesn't read is treated the same way, so a half-written document is never reported.
-- In a folder, a new or changed file must keep the same size and modification time across `settle` before it's hashed.
+- A JSON, YAML or `.env` file that doesn't read is treated the same way. A half-written JSON document never reads; YAML and `.env` can read when cut short, so the next rule covers them.
+- A source that disappears, or a JSON, YAML or `.env` file that loses more than half its size, is only reported when the next check sees the same thing. That check comes after the source's interval, or after a second if the interval is longer. A file replaced by delete-and-write, or rewritten in two steps, gives no event when it ends up as it was.
+- In a folder, a new or changed file must keep the same size and modification time across `settle` before it's hashed. A file still being written is left out until it settles, and the rest of the folder is reported as usual.
 
 ## Events
 
@@ -121,10 +124,10 @@ Each change is POSTed as JSON:
 }
 ```
 
-- `op` is `added`, `removed` or `changed`. `path` is a field by dot path, a file name in a folder, `status` for an HTTP status, or `line` for text compared line by line. At most 100 changes are listed per event.
+- `op` is `added`, `removed` or `changed`. `path` is a field by dot path, a file name in a folder, `status` for an HTTP status, `line` for text compared line by line, or empty for the whole source. At most 100 changes are listed per event, followed by one that says how many more there were.
 - `sequence` counts the changes of one source: 1, 2, 3.
-- `id` is derived from the source, the sequence and the content before and after. A change found again after a crash, before the state was saved, gets the same id.
-- Values under keys that look secret (`password`, `token`, `api_key`, `secret`, `auth` and similar, as in [AfterConfig](config.md#secrets)) are sent as `REDACTED`. So are user names and passwords inside URLs.
+- `id` is derived from the source, the sequence, the content before and after, and a random value chosen with each baseline. A change found again after a crash, before the state was saved, gets the same id, and a new baseline never repeats an old one.
+- Values under keys that look secret (`password`, `token`, `api_key`, `secret`, `auth` and similar, as in [AfterConfig](config.md#secrets)) are sent as `REDACTED`. So are user names and passwords inside URLs. In text compared line by line, the same goes for pairs written as `key = value`, `key: value`, `"key": "value"` or `key=value` in a query string.
 
 ### Headers and signature
 
@@ -148,12 +151,15 @@ Delivery is at least once:
 - A failed delivery is retried after `backoff`, then twice as long each time, up to `max_backoff`. By default it's retried until it's delivered.
 - Each webhook gets its events in order. While the oldest waits for a retry, the later ones wait too.
 - With `max_attempts` set, an event that still fails after that many attempts is moved to the dead-letter file, `STATE.dead.jsonl` next to the state file, and the next one is sent.
+- When a webhook is removed from the config, its waiting events go to the dead-letter file, whatever `max_attempts` says.
+- Stopping with Ctrl-C during a send doesn't count as an attempt; the event is sent on the next run.
+- A webhook named twice in `send_to` still gets each event once.
 
 Because delivery is at least once, a receiver can occasionally get the same event twice, for example when AfterHook stops after the receiver accepted an event but before it saved that. Use the event id to drop repeats.
 
 ## The state file
 
-The state file holds each source's last snapshot and the events not yet delivered. It's written in one step after every change, readable by its owner only, because snapshots can hold file contents. Keep it between runs: it's what makes restarts lose nothing.
+The state file holds each source's last snapshot and the events not yet delivered. It's written in one step after each round of checks and each round of deliveries, readable by its owner only, because snapshots can hold file contents. If AfterHook stops between a delivery and the save after it, that event is sent again next time, which the event id lets a receiver spot. Keep it between runs: it's what makes restarts lose nothing.
 
 If it can't be read, `run` stops rather than start over, since its queue may hold events not yet sent. Move it aside to start from a new baseline.
 

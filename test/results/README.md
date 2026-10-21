@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.4.0
-- Recorded: 2026-10-21T11:34:17Z
+- Version: 0.5.0
+- Recorded: 2026-10-21T12:47:33Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-296 of 296 tests passed (race detector on).
+331 of 331 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -18,6 +18,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | cmd/aftermarket | TestCheckExample | pass |
 | cmd/aftermarket | TestCheckReportsErrorsAndOverlaps | pass |
 | cmd/aftermarket | TestConfigCommands | pass |
+| cmd/aftermarket | TestHookCommands | pass |
 | cmd/aftermarket | TestRecordCheck | pass |
 | cmd/aftermarket | TestRecordNeverOverwrites | pass |
 | cmd/aftermarket | TestRecordOnBusyPortLeavesNoFile | pass |
@@ -33,6 +34,8 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | examples/customer-api | TestOldClientPassesThroughAdapt | pass |
 | examples/customer-api | TestRecordedSuiteReplaysTheSameThroughAdapt | pass |
 | examples/customer-api | TestV2BreaksTheOldClient | pass |
+| examples/legacy-app | TestFixturePasses | pass |
+| examples/legacy-app | TestTheExampleEndToEnd | pass |
 | examples/legacy-customer | TestFixtureFilePasses | pass |
 | examples/legacy-customer | TestOldClientNeedsTheRules | pass |
 | examples/legacy-customer | TestRemovingEitherRuleBreaksTheClient | pass |
@@ -103,6 +106,33 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/config | TestYAMLWriterReadsBack | pass |
 | internal/fixture | TestFixtureErrors | pass |
 | internal/fixture | TestFixtureReportsFailures | pass |
+| internal/hook | TestABusyFileDoesNotBlockTheFolder | pass |
+| internal/hook | TestAChangeSeenAgainAfterACrashKeepsItsID | pass |
+| internal/hook | TestAFileThatBlinksGivesNoEvent | pass |
+| internal/hook | TestBaselinesDryRunAndState | pass |
+| internal/hook | TestCommandSources | pass |
+| internal/hook | TestCommandTimeoutWithAChildHoldingStdout | pass |
+| internal/hook | TestDeadLetters | pass |
+| internal/hook | TestDeliveryKeepsOrderPerWebhook | pass |
+| internal/hook | TestDisplayURLHidesPathsAndQueries | pass |
+| internal/hook | TestDryRunPrintsEachChangeOnce | pass |
+| internal/hook | TestEveryChangeGivesExactlyOneEvent | pass |
+| internal/hook | TestFieldDiffSaysHowManyMore | pass |
+| internal/hook | TestFixtureLoading | pass |
+| internal/hook | TestFolders | pass |
+| internal/hook | TestHTTPSources | pass |
+| internal/hook | TestHalfWrittenFilesAreNeverReported | pass |
+| internal/hook | TestHelperProcess | pass |
+| internal/hook | TestIDsNeverRepeatAcrossBaselines | pass |
+| internal/hook | TestLineDiffsKeepSecretsOut | pass |
+| internal/hook | TestLoadReportsEveryProblemInLineOrder | pass |
+| internal/hook | TestNothingIsLostWhileTheReceiverIsDown | pass |
+| internal/hook | TestRedactLine | pass |
+| internal/hook | TestSecretsStayOut | pass |
+| internal/hook | TestSendToNamesEachWebhookOnce | pass |
+| internal/hook | TestStoppingMidSendKeepsTheEvent | pass |
+| internal/hook | TestTruncatedStructuredFilesWait | pass |
+| internal/hook | TestUntilNextWaitsForTheHead | pass |
 | internal/ojson | TestCloneIsDeep | pass |
 | internal/ojson | TestDecodeKeepsRealReplacementCharacters | pass |
 | internal/ojson | TestDecodeRejects | pass |
@@ -200,17 +230,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 56.8 µs | 303.1 µs | 26028 |
-| proxy, no rule matches | 165.4 µs | 1124.5 µs | 6693 |
-| proxy, both example rules applied | 209.6 µs | 1976.5 µs | 5972 |
-| adapt: direct to v2, one customer | 56.1 µs | 378.0 µs | 22634 |
-| adapt: v1 lookup rebuilt from v2 | 224.4 µs | 2395.2 µs | 5761 |
-| adapt: direct to v2, list | 49.1 µs | 365.9 µs | 22594 |
-| adapt: v1 list rebuilt from v2 | 259.8 µs | 2600.9 µs | 4928 |
-| record: v2 lookup saved to a fixture | 235.8 µs | 1751.0 µs | 4747 |
+| direct to upstream | 74.4 µs | 420.0 µs | 22569 |
+| proxy, no rule matches | 159.4 µs | 1242.8 µs | 5829 |
+| proxy, both example rules applied | 218.9 µs | 2018.4 µs | 5226 |
+| adapt: direct to v2, one customer | 52.1 µs | 365.8 µs | 22097 |
+| adapt: v1 lookup rebuilt from v2 | 199.2 µs | 2283.3 µs | 4965 |
+| adapt: direct to v2, list | 66.3 µs | 443.0 µs | 19891 |
+| adapt: v1 list rebuilt from v2 | 255.7 µs | 2308.4 µs | 5432 |
+| record: v2 lookup saved to a fixture | 231.1 µs | 1894.6 µs | 5222 |
 
-Added by the proxy when no rule matches: 108.6 µs at p50, 821.4 µs at p99.
-Added by the proxy with both example rules applied: 152.8 µs at p50, 1673.4 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 168.3 µs at p50, 2017.2 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 210.7 µs at p50, 2235.0 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 179.7 µs at p50, 1373.0 µs at p99.
+Added by the proxy when no rule matches: 85.0 µs at p50, 822.8 µs at p99.
+Added by the proxy with both example rules applied: 144.5 µs at p50, 1598.4 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 147.1 µs at p50, 1917.5 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 189.4 µs at p50, 1865.4 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 179.0 µs at p50, 1528.8 µs at p99.
