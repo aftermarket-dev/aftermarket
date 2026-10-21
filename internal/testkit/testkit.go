@@ -403,8 +403,12 @@ func CheckStalledBodies(t testing.TB, start func(upstream string) string) {
 		if resp.StatusCode != wantStatus {
 			t.Fatalf("%s: status %d, want %d (%v)", name, resp.StatusCode, wantStatus, resp.Header)
 		}
+		answered := time.Now()
 		if _, err := br.ReadByte(); err != io.EOF {
 			t.Fatalf("%s: the connection was kept after the stalled body: %v", name, err)
+		}
+		if wantStatus == http.StatusRequestTimeout && time.Since(answered) > 250*time.Millisecond {
+			t.Fatalf("%s: the connection was held %v after the 408", name, time.Since(answered))
 		}
 	}
 	stall("upstream down", start(down), http.StatusBadGateway)
@@ -615,5 +619,65 @@ func CheckOddClients(t testing.TB, start func(upstream string) string) {
 	resp, err = http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("101 before the body ended: %v %v", resp, err)
+	}
+}
+
+// CheckClientGone checks that a client that goes away frees the upstream
+// call within a grace of upstream_timeout (start must set it to 300ms),
+// even in the middle of a stream that has gone quiet.
+func CheckClientGone(t testing.TB, start func(upstream string) string) {
+	t.Helper()
+	cancelled := make(chan struct{}, 1)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("first part\n"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+			cancelled <- struct{}{}
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer up.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(start(up.URL), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	io.WriteString(conn, "GET /stream HTTP/1.1\r\nHost: x\r\n\r\n")
+	if _, err := http.ReadResponse(bufio.NewReader(conn), nil); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close()
+	select {
+	case <-cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the upstream call went on after the client left")
+	}
+}
+
+// CheckCutBody sends a body that breaks off (the client closes its side
+// before the announced length) and fails unless the answer is 400 and,
+// when the proxy reads the body (a rule or a template), nothing reaches
+// the upstream at all.
+func CheckCutBody(t testing.TB, proxyURL, path string, reached func() int) {
+	t.Helper()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxyURL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 70\r\n\r\n{\"qty\":1}", path)
+	conn.(*net.TCPConn).CloseWrite()
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("cut-off body to %s: %v", path, err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("cut-off body to %s: status %d, want 400", path, resp.StatusCode)
+	}
+	if reached != nil && reached() != 0 {
+		t.Fatalf("cut-off body to %s reached the upstream as if it were whole", path)
 	}
 }

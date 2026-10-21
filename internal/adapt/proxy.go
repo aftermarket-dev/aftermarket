@@ -132,15 +132,6 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if pl != nil {
 		r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, pl))
 	}
-	if pl != nil && !p.opts.DryRun && (pl.dropBody || (pl.bodySet && !pl.fromBody)) {
-		// The old body isn't forwarded: read it off here, so the
-		// connection can be used again.
-		if err := httpx.DrainBody(r, p.opts.Config.MaxBody); err != nil {
-			p.skip(pl, err.Error())
-			httpx.WriteRequestTimeout(w)
-			return
-		}
-	}
 	p.rp.ServeHTTP(w, r)
 }
 
@@ -216,7 +207,7 @@ func (p *Proxy) plan(w http.ResponseWriter, r *http.Request) (*plan, bool) {
 			default:
 				if err := httpx.BufferRequestBody(r, p.opts.Config.MaxBody); err != nil {
 					p.skip(pl, err.Error())
-					httpx.WriteRequestTimeout(w)
+					httpx.WriteBodyError(w, err)
 					return pl, true
 				}
 				jb, restored, _ := httpx.ReadJSON(r.Body, r.Header.Get("Content-Encoding"), p.opts.Config.MaxBody, 0, "request")
@@ -253,6 +244,15 @@ func (p *Proxy) plan(w http.ResponseWriter, r *http.Request) (*plan, bool) {
 			applied = append(applied, a.desc)
 		} else {
 			notApplied = append(notApplied, a.desc)
+		}
+	}
+	if !p.opts.DryRun && (pl.dropBody || (pl.bodySet && !pl.fromBody)) {
+		// The old body isn't forwarded: read it off here, so the
+		// connection can be used again.
+		if err := httpx.DrainBody(r, p.opts.Config.MaxBody); err != nil {
+			p.skip(pl, err.Error())
+			httpx.WriteBodyError(w, err)
+			return pl, true
 		}
 	}
 	kind := p.changedKind()

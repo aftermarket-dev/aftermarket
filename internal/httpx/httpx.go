@@ -272,8 +272,12 @@ func UpstreamReason(err error) (int, string) {
 
 // WriteUpstreamError answers the client when the upstream failed.
 func WriteUpstreamError(w http.ResponseWriter, status int) {
-	if status == http.StatusRequestTimeout {
-		WriteRequestTimeout(w) // the client's body stalled, not the upstream
+	switch status {
+	case http.StatusRequestTimeout: // the client's body stalled, not the upstream
+		WriteRequestTimeout(w)
+		return
+	case http.StatusBadRequest: // the client's body broke off
+		writeClose(w, http.StatusBadRequest, "aftermarket: request body was cut off\n")
 		return
 	}
 	msg := "aftermarket: upstream unreachable\n"
@@ -358,13 +362,38 @@ func BufferRequestBody(r *http.Request, max int64) error {
 		return nil
 	}
 	br, err := ReadBody(r.Body, max)
-	if errors.Is(err, ErrClientBodyStalled) {
+	switch {
+	case errors.Is(err, ErrClientBodyStalled):
 		return ErrRequestBodyTimeout
+	case err != nil && !errors.Is(err, ErrTooLarge):
+		// Never translated or forwarded as if it were whole.
+		return ErrRequestBodyCut
 	}
-	// On any other read error, what arrived is forwarded, so the upstream
-	// sees the same broken body the proxy saw.
 	r.Body = br.Restore()
 	return nil
+}
+
+// ErrRequestBodyCut is returned when the client's body broke off before
+// its end: the connection closed or the framing was wrong.
+var ErrRequestBodyCut = errors.New("the client's request body was cut off")
+
+// WriteBodyError answers a client whose body couldn't be read: 408 when it
+// stalled, 400 when it was cut off.
+func WriteBodyError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrRequestBodyCut) {
+		writeClose(w, http.StatusBadRequest, "aftermarket: request body was cut off\n")
+		return
+	}
+	WriteRequestTimeout(w)
+}
+
+func writeClose(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Aftermarket-Error", strconv.Itoa(status))
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Content-Length", strconv.Itoa(len(msg)))
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(msg))
 }
 
 // WriteRequestTimeout answers a client whose body stalled.
@@ -428,10 +457,29 @@ var ErrClientBodyStalled = errors.New("the client's request body stopped arrivin
 // it sends the answer, then reads what the client still sends for at most
 // idle, and closes the body inside the handler, as the server needs.
 func WatchBody(w http.ResponseWriter, r *http.Request, idle time.Duration) (out *http.Request, done func()) {
-	// Cancelled only when the handler is done. (A context that can't be
-	// cancelled at all makes the reverse proxy fall back to CloseNotify,
-	// which fires on a half-close.)
-	ctx, cancel := context.WithCancel(context.WithoutCancel(r.Context()))
+	// The forwarded request isn't cancelled the moment the server sees the
+	// client's side close, which a half-close looks like, but idle later:
+	// a client that half-closed gets its answer if it comes in that time,
+	// and one that is really gone frees the upstream call by then. (A
+	// context that can't be cancelled at all makes the reverse proxy fall
+	// back to CloseNotify, which fires on a half-close.)
+	ctx, cancelNow := context.WithCancel(context.WithoutCancel(r.Context()))
+	var graceMu sync.Mutex
+	var grace *time.Timer
+	stopGrace := context.AfterFunc(r.Context(), func() {
+		graceMu.Lock()
+		grace = time.AfterFunc(idle, cancelNow)
+		graceMu.Unlock()
+	})
+	cancel := func() {
+		stopGrace()
+		graceMu.Lock()
+		if grace != nil {
+			grace.Stop()
+		}
+		graceMu.Unlock()
+		cancelNow()
+	}
 	if r.Body == nil || r.Body == http.NoBody || idle <= 0 {
 		return r.WithContext(ctx), cancel
 	}
@@ -455,8 +503,12 @@ func WatchBody(w http.ResponseWriter, r *http.Request, idle time.Duration) (out 
 		case !ended:
 			_ = b.ctl.Flush()
 			until := time.Now().Add(b.idle)
-			if b.expect && !readAny {
-				// No 100 Continue went out, so no body is coming.
+			b.mu.Lock()
+			broken := b.err != nil
+			b.mu.Unlock()
+			if broken || (b.expect && !readAny) {
+				// The body stalled or broke off, or no 100 Continue went out
+				// and none is coming: no reason to wait for more.
 				until = time.Now()
 			}
 			_ = b.ctl.SetReadDeadline(until)
@@ -486,8 +538,11 @@ func DrainBody(r *http.Request, max int64) error {
 		return nil
 	}
 	_, err := io.CopyN(io.Discard, r.Body, max+1)
-	if errors.Is(err, ErrClientBodyStalled) {
+	switch {
+	case errors.Is(err, ErrClientBodyStalled):
 		return ErrRequestBodyTimeout
+	case err != nil && err != io.EOF:
+		return ErrRequestBodyCut
 	}
 	return nil
 }
@@ -529,6 +584,7 @@ type progressBody struct {
 	ended       bool // every byte of the body has arrived
 	sawEOF      bool // the server has seen the end and reads the connection now
 	stalled     bool
+	err         error // the first read error, returned from then on
 	upgraded    bool
 }
 
@@ -543,12 +599,21 @@ func (b *progressBody) isEnded() bool {
 func (b *progressBody) deadline(t time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.handlerDone && !b.ended {
+	if !b.handlerDone && !b.ended && !b.upgraded {
 		_ = b.ctl.SetReadDeadline(t)
 	}
 }
 
 func (b *progressBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	if b.err != nil {
+		// A body that broke off stays broken: Go's server reports a clean
+		// end after an unexpected one, and the rest would pass as whole.
+		err := b.err
+		b.mu.Unlock()
+		return 0, err
+	}
+	b.mu.Unlock()
 	b.deadline(time.Now().Add(b.idle))
 	n, err := b.body.Read(p)
 	b.mu.Lock()
@@ -568,14 +633,19 @@ func (b *progressBody) Read(p []byte) (int, error) {
 		b.mu.Unlock()
 		return n, err
 	}
-	var ne net.Error
-	if err != nil && errors.As(err, &ne) && ne.Timeout() {
-		b.mu.Lock()
-		b.stalled = true
-		b.mu.Unlock()
-		return n, ErrClientBodyStalled
+	if err == nil {
+		return n, nil
 	}
-	return n, err
+	var ne net.Error
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if errors.As(err, &ne) && ne.Timeout() {
+		b.stalled = true
+		b.err = ErrClientBodyStalled
+	} else {
+		b.err = ErrRequestBodyCut
+	}
+	return n, b.err
 }
 
 // Close doesn't read the rest of the body: the transport closes it when the
@@ -592,13 +662,16 @@ func (b *progressBody) Close() error { return nil }
 func ForwardError(w http.ResponseWriter, r *http.Request, err error) (status int, reason string) {
 	if b := watched(r); b != nil {
 		b.mu.Lock()
-		stalled, ended := b.stalled, b.ended
+		stalled, ended, broken := b.stalled, b.ended, b.err != nil
 		b.mu.Unlock()
 		if !ended {
 			w.Header().Set("Connection", "close")
 		}
-		if stalled {
+		switch {
+		case stalled:
 			return http.StatusRequestTimeout, "request body stopped arriving for upstream_timeout"
+		case broken:
+			return http.StatusBadRequest, "request body was cut off by the client"
 		}
 	}
 	return UpstreamReason(err)

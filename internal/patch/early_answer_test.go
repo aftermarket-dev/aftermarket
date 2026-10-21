@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,4 +111,25 @@ func TestOddClients(t *testing.T) {
 	tk.CheckOddClients(t, func(up string) string {
 		return startProxy(t, "limits: {upstream_timeout: 300ms}\n"+strings.TrimPrefix(neverMatches, "\n"), up, false).proxyURL
 	})
+}
+
+// See CheckClientGone.
+func TestClientGoneFreesTheUpstream(t *testing.T) {
+	tk.CheckClientGone(t, func(up string) string {
+		return startProxy(t, "limits: {upstream_timeout: 300ms}\n"+strings.TrimPrefix(neverMatches, "\n"), up, false).proxyURL
+	})
+}
+
+// A body that breaks off gets 400; one a rule reads never reaches the
+// upstream as if it were whole.
+func TestCutBody(t *testing.T) {
+	var n atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		n.Add(1)
+	}))
+	defer up.Close()
+	h := startProxy(t, strings.TrimPrefix(requestRules, "\n"), up.URL, false)
+	tk.CheckCutBody(t, h.proxyURL, "/orders", func() int { return int(n.Load()) })
+	tk.CheckCutBody(t, h.proxyURL, "/other", nil)
 }

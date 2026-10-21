@@ -63,3 +63,18 @@ func TestOddClients(t *testing.T) {
 		return start(t, "limits: {upstream_timeout: 300ms}\n", up).url
 	})
 }
+
+// See CheckClientGone.
+func TestClientGoneFreesTheUpstream(t *testing.T) {
+	tk.CheckClientGone(t, func(up string) string {
+		return start(t, "limits: {upstream_timeout: 300ms}\n", up).url
+	})
+}
+
+// A body that breaks off gets 400 and is never recorded.
+func TestCutBody(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.ReadAll(r.Body) }))
+	defer up.Close()
+	h := start(t, "", up.URL)
+	tk.CheckCutBody(t, h.url, "/orders", nil)
+}

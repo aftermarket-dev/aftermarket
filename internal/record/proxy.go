@@ -197,8 +197,11 @@ func (r *Recorder) errorHandler(w http.ResponseWriter, req *http.Request, err er
 		})
 		if ex.record {
 			why := "the upstream failed, so there is no answer to record"
-			if status == http.StatusRequestTimeout {
+			switch status {
+			case http.StatusRequestTimeout:
 				why = "the client's request body stopped arriving"
+			case http.StatusBadRequest:
+				why = "the client's request body was cut off"
 			}
 			r.skip(ex, status, why)
 		}

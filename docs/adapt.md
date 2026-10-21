@@ -100,7 +100,7 @@ Lists can be nested. A key that starts with `$` must be written `$$` to mean a l
 `request.body` replaces the body of the new request.
 
 - If the template reads the old body (`$` or `$.`), the old request must have a JSON `Content-Type` and a body that can be read safely: valid JSON, within `max_body`, identity or gzip encoded. Otherwise the whole request passes through untouched. A gzip body comes out gzipped again.
-- A request body may arrive slowly, but each part must come within `upstream_timeout` of the last. A client that stalls mid-body gets `408` and its connection is closed; when the proxy needed the body, the event is logged as skipped. When a mapping replaces the old body or drops it, the proxy reads the old one off, up to `max_body`, so the connection can be used again.
+- A request body may arrive slowly, but each part must come within `upstream_timeout` of the last. A client that stalls mid-body gets `408`, and one whose body breaks off before its announced length gets `400`; either way the connection is closed. When a mapping replaces the old body or drops it, the proxy reads the old one off, up to `max_body`, so the connection can be used again. When the proxy reads a body, for a template or to drop it, and it stalls or breaks off, the request is logged once, as skipped, and nothing reaches the upstream.
 - If the template doesn't read the old body, for example when it only uses `$params` and literals, it's built anyway, sent as `application/json` and not compressed.
 - A `request.body` on an endpoint whose new method is `GET` or `HEAD` is an error.
 - Without `request.body`, the old body is forwarded as it is, unless the new method is `GET` or `HEAD`. Then it's dropped, along with `Content-Type` and `Content-Encoding`.

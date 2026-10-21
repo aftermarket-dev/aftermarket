@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,7 +143,12 @@ func TestKeepAliveWithBodies(t *testing.T) {
 // client its real answer: no deadline may be left on the client's
 // connection while the copy in memory is sent.
 func TestBodyJustOverMaxToASlowUpstream(t *testing.T) {
+	// The upstream sends its headers at once, so the transport's own
+	// header timeout plays no part, then waits before reading the body.
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = http.NewResponseController(w).EnableFullDuplex()
+		w.WriteHeader(200)
+		w.(http.Flusher).Flush()
 		time.Sleep(2500 * time.Millisecond)
 		b, _ := io.ReadAll(r.Body)
 		fmt.Fprintf(w, "got %d", len(b))
@@ -164,4 +170,27 @@ func TestOddClients(t *testing.T) {
 	tk.CheckOddClients(t, func(up string) string {
 		return start(t, "limits: {upstream_timeout: 300ms}\n"+exampleConfig(t), up, false).url
 	})
+}
+
+// See CheckClientGone.
+func TestClientGoneFreesTheUpstream(t *testing.T) {
+	tk.CheckClientGone(t, func(up string) string {
+		return start(t, "limits: {upstream_timeout: 300ms}\n"+exampleConfig(t), up, false).url
+	})
+}
+
+// A body that breaks off gets 400, and a template never builds a new body
+// from part of one.
+func TestCutBody(t *testing.T) {
+	var n atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.ReadAll(r.Body)
+		n.Add(1)
+	}))
+	defer up.Close()
+	h := start(t, bodyEndpoints, up.URL, false)
+	reached := func() int { return int(n.Load()) }
+	tk.CheckCutBody(t, h.url, "/api/v1/copy", reached)
+	tk.CheckCutBody(t, h.url, "/api/v1/drop", reached)
+	tk.CheckCutBody(t, h.url, "/api/v1/thing?id=7", reached)
 }

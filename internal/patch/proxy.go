@@ -134,7 +134,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			for _, rr := range st.reqRules {
 				p.event(st, rr, "request", audit.Skipped, 0, nil, nil, err.Error())
 			}
-			httpx.WriteRequestTimeout(w)
+			httpx.WriteBodyError(w, err)
 			return
 		}
 		break
