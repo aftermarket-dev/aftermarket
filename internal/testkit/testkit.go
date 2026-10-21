@@ -240,3 +240,85 @@ func (rc *Recorder) All() []Recorded {
 	defer rc.mu.Unlock()
 	return append([]Recorded(nil), rc.reqs...)
 }
+
+// EarlyAnswer is an upstream transport that answers as soon as it has read
+// the request body's declared length, before it has seen the body end, as a
+// fast upstream does in real life. It sends the answer in two parts, and
+// between them reads the request body once more, which must still report a
+// clean end. A proxy whose server closes the client's body when the answer
+// starts going out fails that read, and Go's transport then drops the
+// upstream connection mid-answer.
+type EarlyAnswer struct {
+	mu   sync.Mutex
+	errs []error
+}
+
+// Errors returns what the late reads of request bodies returned.
+func (e *EarlyAnswer) Errors() []error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]error(nil), e.errs...)
+}
+
+func (e *EarlyAnswer) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.Body != nil && r.ContentLength > 0 {
+		if _, err := io.ReadFull(r.Body, make([]byte, r.ContentLength)); err != nil {
+			return nil, err
+		}
+	}
+	return &http.Response{
+		StatusCode: 200, Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header:        http.Header{"Content-Type": {"application/octet-stream"}, "Content-Length": {"2000"}},
+		ContentLength: 2000,
+		Body:          &lateRead{e: e, req: r.Body},
+		Request:       r,
+	}, nil
+}
+
+type lateRead struct {
+	e    *EarlyAnswer
+	req  io.ReadCloser
+	part int
+}
+
+func (l *lateRead) Read(p []byte) (int, error) {
+	l.part++
+	switch l.part {
+	case 1:
+		return copy(p, bytes.Repeat([]byte("a"), 1000)), nil
+	case 2:
+		var err error = io.EOF
+		if l.req != nil {
+			_, err = l.req.Read(make([]byte, 1))
+		}
+		l.e.mu.Lock()
+		l.e.errs = append(l.e.errs, err)
+		l.e.mu.Unlock()
+		return copy(p, bytes.Repeat([]byte("b"), 1000)), io.EOF
+	}
+	return 0, io.EOF
+}
+
+func (l *lateRead) Close() error { return nil }
+
+// CheckEarlyAnswer sends a request with a body through a proxy whose
+// upstream is ea, and fails unless the whole answer arrived and the late
+// read of the request body saw a clean end.
+func CheckEarlyAnswer(t testing.TB, proxyURL string, ea *EarlyAnswer) {
+	t.Helper()
+	for i := 0; i < 3; i++ {
+		got := Do(t, "POST", proxyURL+"/api/upload", http.Header{"Content-Type": {"application/octet-stream"}}, bytes.Repeat([]byte("x"), 5000))
+		if got.Status != 200 || len(got.Body) != 2000 {
+			t.Fatalf("status %d, %d of 2000 bytes", got.Status, len(got.Body))
+		}
+	}
+	errs := ea.Errors()
+	if len(errs) != 3 {
+		t.Fatalf("%d late reads, want 3", len(errs))
+	}
+	for _, err := range errs {
+		if err != io.EOF {
+			t.Fatalf("the request body was closed under the upstream while the answer went out: %v", err)
+		}
+	}
+}

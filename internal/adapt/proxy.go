@@ -118,6 +118,7 @@ func (p *Proxy) event(pl *plan, phase, kind string, status int, applied, notAppl
 
 // ServeHTTP handles one request.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	httpx.KeepRequestBody(w)
 	if p.opts.HealthPath != "" && r.URL.Path == p.opts.HealthPath {
 		httpx.WriteHealth(w)
 		return

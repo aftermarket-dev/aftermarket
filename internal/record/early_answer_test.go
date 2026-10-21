@@ -1,0 +1,25 @@
+package record_test
+
+import (
+	"net/http/httptest"
+	"net/url"
+	"testing"
+
+	"github.com/aftermarket-dev/aftermarket/internal/audit"
+	"github.com/aftermarket-dev/aftermarket/internal/record"
+	tk "github.com/aftermarket-dev/aftermarket/internal/testkit"
+)
+
+// See TestEarlyAnswerIsNotCutOff in patch: a fast upstream's answer to a
+// request with a body must arrive whole, recorded or not.
+func TestEarlyAnswerIsNotCutOff(t *testing.T) {
+	ea := &tk.EarlyAnswer{}
+	u, _ := url.Parse("http://upstream.invalid")
+	rec, err := record.New(record.Options{Upstream: u, Config: record.Default(), Out: &lockedBuffer{}, Audit: audit.New(&tk.AuditSink{}), Transport: ea})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(rec)
+	defer srv.Close()
+	tk.CheckEarlyAnswer(t, srv.URL, ea)
+}

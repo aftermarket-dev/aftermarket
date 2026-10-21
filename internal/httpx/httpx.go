@@ -380,3 +380,14 @@ func SafeURL(u *url.URL) string {
 	}
 	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}).String()
 }
+
+// KeepRequestBody stops Go's server from finishing and closing the client's
+// request body when the answer starts going out. A proxy streams that body
+// upstream from the transport's own goroutine, and a fast upstream can
+// answer before the transport has read the body's end. Closed under it, the
+// transport counts the request as failed and drops the upstream connection
+// in the middle of the answer. With the body left alone, the server still
+// finishes it once the handler returns.
+func KeepRequestBody(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).EnableFullDuplex()
+}

@@ -97,6 +97,7 @@ func (r *Recorder) Cases() int {
 
 // ServeHTTP passes one request through and, when it matches, records it.
 func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	httpx.KeepRequestBody(w)
 	if r.opts.HealthPath != "" && req.URL.Path == r.opts.HealthPath {
 		httpx.WriteHealth(w)
 		return
