@@ -107,12 +107,14 @@ func TestExactIsExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"a,b,c,d) VALUES(1,'1',1.5,X'00ff');",
-		"a,b,c,d) VALUES(2,replace('x\\ny','\\n',char(10)),NULL,'NULL');",
-	}
-	if strings.Join(rows, "|") != strings.Join(want, "|") {
+	// sqlite3 escapes line breaks with replace(...) or, from 3.50, unistr(...).
+	if len(rows) != 2 || rows[0] != "a,b,c,d) VALUES(1,'1',1.5,X'00ff');" ||
+		strings.Contains(rows[1], "\n") || !strings.HasPrefix(rows[1], "a,b,c,d) VALUES(2,") || !strings.HasSuffix(rows[1], ",NULL,'NULL');") {
 		t.Fatalf("%q", rows)
+	}
+	other, err := r.Exact(context.Background(), dump(t, "create table t(a, b, c, d); insert into t values (2, 'x'||char(13)||'y', NULL, 'NULL');"), "", "select * from t")
+	if err != nil || len(other) != 1 || other[0] == rows[1] || strings.Contains(other[0], "\r") {
+		t.Fatalf("a carriage return must differ from a line feed: %q %v", other, err)
 	}
 	if rows, err := r.Exact(context.Background(), src, "", "select a as \"x\ny\" from t"); err != nil || len(rows) != 2 || !strings.HasPrefix(rows[0], "\"x\ny\") VALUES(1)") {
 		t.Fatalf("a name with a line break: %q %v", rows, err)

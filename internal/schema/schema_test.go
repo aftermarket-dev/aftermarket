@@ -472,13 +472,11 @@ func TestDiffDetails(t *testing.T) {
 	r := runner(t)
 	old := read(t, r, `CREATE TABLE customers (id, name, fax);
 CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT DEFAULT 'WITHOUT ROWID');
-CREATE TABLE ids (id INTEGER PRIMARY KEY, v);
-CREATE VIRTUAL TABLE docs USING fts5(body);`)
+CREATE TABLE ids (id INTEGER PRIMARY KEY, v);`)
 	nw := read(t, r, `CREATE TABLE accounts (id, name);
 CREATE VIEW customers AS SELECT id FROM accounts;
 CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT DEFAULT 'WITHOUT ROWID');
-CREATE TABLE ids (id INT PRIMARY KEY, v);
-CREATE VIRTUAL TABLE docs USING fts5(body);`)
+CREATE TABLE ids (id INT PRIMARY KEY, v);`)
 	var lines []string
 	for _, c := range Diff(old, nw) {
 		lines = append(lines, fmt.Sprintf("%v %s", c.Breaking, c))
@@ -497,8 +495,21 @@ CREATE VIRTUAL TABLE docs USING fts5(body);`)
 			t.Errorf("%q should not appear in\n%s", not, got)
 		}
 	}
-	if d := old.Table("docs"); d == nil || len(d.Columns) != 1 {
-		t.Fatalf("the virtual table's hidden columns were kept: %+v", d)
+}
+
+// FTS5's inner tables and hidden columns aren't part of the schema shown.
+// Some sqlite3 builds (macOS's) have no FTS5.
+func TestVirtualTables(t *testing.T) {
+	r := runner(t)
+	s, err := Read(context.Background(), r, sqlFile(t, "CREATE VIRTUAL TABLE docs USING fts5(body);"))
+	if err != nil {
+		if strings.Contains(err.Error(), "no such module") {
+			t.Skip("this sqlite3 has no FTS5")
+		}
+		t.Fatal(err)
+	}
+	if len(s.Tables) != 1 || s.Tables[0].Name != "docs" || len(s.Tables[0].Columns) != 1 {
+		t.Fatalf("%+v", s.Tables)
 	}
 }
 
