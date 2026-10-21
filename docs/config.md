@@ -24,7 +24,8 @@ Exit codes: 0 when everything applies, 1 for problems in the overlay or with the
 ### What apply never does
 
 - **It never writes the vendor's file.** If `--out` names it, whether directly, through a link or by another spelling of the path, apply refuses.
-- **It never changes what the overlay doesn't name.** Other fields keep their place and their exact value. In a JSON file the indentation is kept, so an overlay whose changes are all already in place gives back the vendor's file byte for byte.
+- **It never changes what the overlay doesn't name.** Other fields keep their place and their exact value. When every change is already in place, the output is the vendor's file byte for byte, whatever its layout.
+- **It never writes something it can't read back.** The result is read back before it's written, and if it doesn't hold exactly what was meant, nothing is written.
 - **It never leaves a half-written output.** Applying twice gives the same bytes.
 
 ## Overlay file
@@ -79,28 +80,29 @@ Usually that means the vendor changed something on purpose. Decide whether your 
 
 ### Secrets
 
-Values are never printed when any part of their path contains `password`, `passwd`, `secret`, `token`, `credential`, `apikey`, `api_key`, `api-key`, `private_key` or `access_key`, in any letter case. The same goes for paths listed under `redact:` and everything inside them. They show as `REDACTED` in `check`, `diff` and in problem messages. An object or list that holds such a value shows as `an object` or `a list`. The result written by `apply` has the real values, of course.
+Values are never printed when any part of their path contains `password`, `passwd`, `pass`, `pwd`, `secret`, `token`, `credential`, `auth`, `apikey`, `api_key`, `api-key`, `private`, `access_key`, `accesskey`, `dsn`, `cookie`, `session` or `signature`, in any letter case. The same goes for paths listed under `redact:` and everything inside them, and for a secret that `rename` or `copy` moves to another path. A user name and password inside a URL, as in `postgres://app:pw@db/app`, show as `postgres://REDACTED@db/app`. They show as `REDACTED` in `check`, `diff`, problem messages and `config test` failures. An object or list that holds such a value shows as `an object` or `a list`. The result written by `apply` has the real values, of course.
 
 ## Formats
 
 ### JSON
 
-Keys keep their order, and numbers keep their exact text. The output uses the vendor file's indentation (two spaces, four, a tab, or none for a one-line file) and keeps or leaves out the final newline the same way. Strings keep their value, though an escape such as `é` is written as the character itself.
+Keys keep their order, and numbers keep their exact text. When something changes, the file is written again with the vendor file's indentation (two spaces, four, a tab, or none for a one-line file), its line endings (`\n` or `\r\n`) and its final newline or lack of one. In an indented file, lists are written one item per line. Strings keep their value, though an escape such as `\u00e9` is written as the character itself. So a file laid out by hand may come out laid out differently, with the same content.
 
 ### YAML
 
 AfterConfig reads the YAML subset the other Aftermarket tools read: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
 
 - **Comments are not kept in the output.** The vendor's file still has them.
-- Values keep their order and meaning. An unquoted value the overlay doesn't touch is written back exactly as it was, so an unquoted `yes` stays an unquoted `yes` and means the same to any YAML reader. A block (`|` or `>`) is written as a string with the same text, quoted when it spans lines.
-- New text values that some YAML readers would take for something else, such as `on`, `no`, `2` or `1.5`, are quoted.
+- Values keep their order and meaning. An unquoted value the overlay doesn't touch is written back exactly as it was, so an unquoted `yes` stays an unquoted `yes` and means the same to any YAML reader. Keys keep their quotes or lack of them too, so `80:` stays a number to readers that type keys. A block (`|` or `>`) is written as a string with the same text, quoted when it spans lines.
+- New text values and keys that some YAML reader could take for something else, such as `on`, `no`, `2`, `1.5`, or anything with `:` or `#` in it, are quoted.
 
 ### .env
 
 One `KEY=value` per line, with optional `export `, `# comments` and blank lines. Values can be bare, `"double quoted"` (with `\n`, `\t`, `\"` and `\\` escapes) or `'single quoted'` (taken as written).
 
 - Every line the overlay doesn't change is written back byte for byte, comments and blank lines included.
-- A changed value is rewritten in place, keeping `export`. A renamed key keeps its line. New keys go at the end.
+- A changed value is rewritten in place, keeping `export` and any `# comment` after it. A renamed key keeps its line, value and comment exactly. New keys go at the end. Files with `\r\n` line endings keep them.
+- Rewritten values are quoted so they read back as the same text: bare when simple, `'single quoted'` when they hold spaces or `$`, so nothing gets expanded, and `"double quoted"` with `\$` escaped when they hold a `'` or a line break.
 - A path is one key, since the file is flat. Values are text: `set` accepts text, numbers and `true`/`false`, and a guard's `expect: 30` matches `30`.
 - A key set twice in the same file is an error. Programs differ on which one wins, so AfterConfig won't guess.
 

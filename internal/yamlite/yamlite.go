@@ -56,9 +56,10 @@ type Node struct {
 
 // Pair is one mapping entry.
 type Pair struct {
-	Key     string
-	KeyLine int
-	Value   *Node
+	Key       string
+	KeyLine   int
+	KeyQuoted bool // the key was written in quotes
+	Value     *Node
 }
 
 // Get returns the value for key in a Map node, or nil.
@@ -366,7 +367,7 @@ func (p *parser) parseMap(indent int) (*Node, error) {
 		if err != nil {
 			return nil, err
 		}
-		n.Pairs = append(n.Pairs, Pair{Key: key, KeyLine: l.num, Value: v})
+		n.Pairs = append(n.Pairs, Pair{Key: key, KeyLine: l.num, KeyQuoted: l.text[0] == '"' || l.text[0] == '\'', Value: v})
 	}
 }
 
@@ -759,7 +760,7 @@ func (f *flowParser) value() (*Node, error) {
 				f.i++
 				return n, nil
 			}
-			key, err := f.key()
+			key, quoted, err := f.key()
 			if err != nil {
 				return nil, err
 			}
@@ -771,7 +772,7 @@ func (f *flowParser) value() (*Node, error) {
 			if err != nil {
 				return nil, err
 			}
-			n.Pairs = append(n.Pairs, Pair{Key: key, KeyLine: f.line, Value: v})
+			n.Pairs = append(n.Pairs, Pair{Key: key, KeyLine: f.line, KeyQuoted: quoted, Value: v})
 			f.skipSpace()
 			if f.i < len(f.s) && f.s[f.i] == ',' {
 				f.i++
@@ -802,20 +803,20 @@ func (f *flowParser) value() (*Node, error) {
 	return scalar(text, f.line)
 }
 
-func (f *flowParser) key() (string, error) {
+func (f *flowParser) key() (string, bool, error) {
 	f.skipSpace()
 	if f.i < len(f.s) && (f.s[f.i] == '"' || f.s[f.i] == '\'') {
 		v, n, err := readQuoted(f.s[f.i:], f.line)
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		f.i += n
 		f.skipSpace()
 		if f.i >= len(f.s) || f.s[f.i] != ':' {
-			return "", errf(f.line, "expected : after key")
+			return "", false, errf(f.line, "expected : after key")
 		}
 		f.i++
-		return v, nil
+		return v, true, nil
 	}
 	start := f.i
 	for f.i < len(f.s) {
@@ -823,14 +824,14 @@ func (f *flowParser) key() (string, error) {
 			key := strings.TrimSpace(f.s[start:f.i])
 			f.i++
 			if key == "" {
-				return "", errf(f.line, "empty key")
+				return "", false, errf(f.line, "empty key")
 			}
-			return key, nil
+			return key, false, nil
 		}
 		if strings.ContainsRune(",]}{[", rune(f.s[f.i])) {
 			break
 		}
 		f.i++
 	}
-	return "", errf(f.line, "expected key: value inside { }")
+	return "", false, errf(f.line, "expected key: value inside { }")
 }

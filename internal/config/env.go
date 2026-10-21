@@ -15,21 +15,23 @@ import (
 type envDoc struct {
 	lines   []envLine
 	newline bool // the file ended with a newline
+	crlf    bool // lines end with \r\n
 }
 
 type envLine struct {
 	raw    string // the line as read; "" for lines the overlay added
 	key    string // "" for comments and blank lines
 	value  string
+	suffix string // what followed the value: spaces and a # comment
 	export bool
-	dirty  bool // rewrite from key and value
+	dirty  bool // rewrite from key, value and suffix
 }
 
 var envKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.\-]*$`)
 
 func parseEnv(data []byte) (document, error) {
 	text := string(data)
-	d := &envDoc{newline: strings.HasSuffix(text, "\n")}
+	d := &envDoc{newline: strings.HasSuffix(text, "\n"), crlf: strings.Contains(text, "\r\n")}
 	text = strings.TrimSuffix(text, "\n")
 	if text == "" {
 		return d, nil
@@ -51,7 +53,7 @@ func parseEnv(data []byte) (document, error) {
 		if !ok || !envKey.MatchString(k) {
 			return nil, fmt.Errorf("line %d: expected KEY=value", i+1)
 		}
-		val, err := envValue(strings.TrimSpace(v))
+		val, suffix, err := envValue(strings.TrimLeft(v, " \t"))
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %v", i+1, err)
 		}
@@ -59,15 +61,17 @@ func parseEnv(data []byte) (document, error) {
 			return nil, fmt.Errorf("line %d: %s is already set on line %d; programs differ on which one wins, so AfterConfig won't guess", i+1, k, prev)
 		}
 		seen[k] = i + 1
-		l.key, l.value = k, val
+		l.key, l.value, l.suffix = k, val, suffix
 		d.lines = append(d.lines, l)
 	}
 	return d, nil
 }
 
 // envValue reads a value: "double quoted" with \n \t \" \\ escapes, 'single
-// quoted' as is, or bare up to a " #" comment.
-func envValue(s string) (string, error) {
+// quoted' as is, or bare up to a " #" comment. It also returns what follows
+// the value, so a rewritten line keeps its comment.
+func envValue(s string) (string, string, error) {
+	s = strings.TrimRight(s, " \t")
 	switch {
 	case strings.HasPrefix(s, `"`):
 		var b strings.Builder
@@ -89,27 +93,28 @@ func envValue(s string) (string, error) {
 			}
 			if c == '"' {
 				if rest := strings.TrimSpace(s[i+1:]); rest != "" && !strings.HasPrefix(rest, "#") {
-					return "", fmt.Errorf("unexpected text after the closing quote")
+					return "", "", fmt.Errorf("unexpected text after the closing quote")
 				}
-				return b.String(), nil
+				return b.String(), s[i+1:], nil
 			}
 			b.WriteByte(c)
 		}
-		return "", fmt.Errorf("unclosed double quote")
+		return "", "", fmt.Errorf("unclosed double quote")
 	case strings.HasPrefix(s, "'"):
 		end := strings.Index(s[1:], "'")
 		if end < 0 {
-			return "", fmt.Errorf("unclosed single quote")
+			return "", "", fmt.Errorf("unclosed single quote")
 		}
 		if rest := strings.TrimSpace(s[end+2:]); rest != "" && !strings.HasPrefix(rest, "#") {
-			return "", fmt.Errorf("unexpected text after the closing quote")
+			return "", "", fmt.Errorf("unexpected text after the closing quote")
 		}
-		return s[1 : end+1], nil
+		return s[1 : end+1], s[end+2:], nil
 	}
 	if i := strings.Index(s, " #"); i >= 0 {
-		s = s[:i]
+		v := strings.TrimRight(s[:i], " \t")
+		return v, s[len(v):], nil
 	}
-	return strings.TrimSpace(s), nil
+	return s, "", nil
 }
 
 func (d *envDoc) root() any {
@@ -205,7 +210,15 @@ func (d *envDoc) rename(from, to ojson.Path) error {
 	if d.find(tk) >= 0 {
 		return fmt.Errorf("%s already exists", tk)
 	}
-	d.lines[i].key, d.lines[i].dirty = tk, true
+	if d.lines[i].dirty {
+		d.lines[i].key = tk
+		return nil
+	}
+	// Change only the key, so the value keeps its exact quoting and comment.
+	raw := d.lines[i].raw
+	at := strings.Index(raw, fk)
+	d.lines[i].raw = raw[:at] + tk + raw[at+len(fk):]
+	d.lines[i].key = tk
 	return nil
 }
 
@@ -229,10 +242,46 @@ func (d *envDoc) copy(from, to ojson.Path) error {
 	return nil
 }
 
+// envQuote writes a value so that dotenv readers and shells read it back as
+// the same text: bare when it's simple, 'single quoted' when it has no ' or
+// line break (nothing inside is expanded), and "double quoted" with \$
+// escaped otherwise.
+func envQuote(v string) string {
+	if envBare.MatchString(v) {
+		return v
+	}
+	if !strings.ContainsAny(v, "'\n\r") {
+		return "'" + v + "'"
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range v {
+		switch r {
+		case '"', '\\', '$', '`':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\r':
+			b.WriteString(`\r`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
 var envBare = regexp.MustCompile(`^[A-Za-z0-9_./:@,+\-]*$`)
 
 func (d *envDoc) encode() ([]byte, error) {
 	var b bytes.Buffer
+	eol := "\n"
+	if d.crlf {
+		eol = "\r\n"
+	}
 	for i, l := range d.lines {
 		if i > 0 {
 			b.WriteByte('\n')
@@ -244,32 +293,14 @@ func (d *envDoc) encode() ([]byte, error) {
 		if l.export {
 			b.WriteString("export ")
 		}
-		b.WriteString(l.key + "=")
-		if envBare.MatchString(l.value) {
-			b.WriteString(l.value)
-			continue
+		b.WriteString(l.key + "=" + envQuote(l.value) + l.suffix)
+		if d.crlf {
+			b.WriteByte('\r')
 		}
-		b.WriteByte('"')
-		for _, r := range l.value {
-			switch r {
-			case '"', '\\':
-				b.WriteByte('\\')
-				b.WriteRune(r)
-			case '\n':
-				b.WriteString(`\n`)
-			case '\t':
-				b.WriteString(`\t`)
-			case '\r':
-				b.WriteString(`\r`)
-			default:
-				b.WriteRune(r)
-			}
-		}
-		b.WriteByte('"')
 	}
 	// Keep the file's own ending, unless the overlay added the last line.
 	if n := len(d.lines); n > 0 && (d.newline || d.lines[n-1].raw == "") {
-		b.WriteByte('\n')
+		b.WriteString(eol[len(eol)-1:])
 	}
 	return b.Bytes(), nil
 }

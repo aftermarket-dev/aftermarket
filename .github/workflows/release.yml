@@ -175,6 +175,13 @@ jobs:
           $PREFIX "$bin" record check --config examples/customer-api/record.yaml
           $PREFIX "$bin" config check --overlay examples/vendor-app/overlay.yaml
           $PREFIX "$bin" config test --overlay examples/vendor-app/overlay.yaml --fixture examples/vendor-app/fixture.yaml
+          $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --out smoke-config.json
+          grep -q '"timeout": 120' smoke-config.json
+          # On 1.1 the guards must stop apply and write nothing.
+          if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --base examples/vendor-app/1.1/config.json --out smoke-11.json; then exit 1; fi
+          [ ! -e smoke-11.json ]
+          # The vendor's file is never written.
+          if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --out examples/vendor-app/1.0/config.json; then exit 1; fi
 
   publish:
     needs: [plan, build, smoke]

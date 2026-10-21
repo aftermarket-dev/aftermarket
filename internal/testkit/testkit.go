@@ -101,7 +101,7 @@ func Do(t testing.TB, method, u string, h http.Header, body []byte) Response {
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("read body: %v", err)
+		t.Fatalf("%s %s: read body after status %d (content length %d, %d bytes read): %v", method, u, resp.StatusCode, resp.ContentLength, len(b), err)
 	}
 	return Response{Status: resp.StatusCode, Header: resp.Header, Body: b}
 }

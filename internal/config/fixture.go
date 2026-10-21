@@ -117,7 +117,12 @@ func (o *Overlay) Run(f *Fixture) []CaseResult {
 			}
 			got, _ := parse(o.Format, r.Out)
 			if got == nil || !equal(got.root(), want.root()) {
-				res.Problems = append(res.Problems, fmt.Sprintf("output differs:\n%s", strings.TrimSpace(string(r.Out))))
+				// Listed field by field from expected to actual, secrets hidden.
+				var diff []string
+				if got != nil {
+					walkDiff(nil, want.root(), got.root(), r.redact, &diff)
+				}
+				res.Problems = append(res.Problems, "output differs from expect: "+strings.Join(diff, "; "))
 			}
 		}
 		res.Pass = len(res.Problems) == 0

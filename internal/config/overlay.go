@@ -246,7 +246,7 @@ func loadChange(n *yamlite.Node, format string, errf func(int, string, ...any)) 
 	}
 	value := func(key string) any {
 		// Plain YAML text in the overlay stays plain in a YAML output.
-		v := yamlTree(args.Get(key))
+		v := yamlTree(args.Get(key), nil)
 		if err := rules.CheckNumbers(plain(v)); err != nil {
 			errf(args.Get(key).Line, "%s: %v", key, err)
 			ok = false
@@ -297,7 +297,12 @@ type Problem struct {
 	Msg  string
 }
 
-func (p Problem) String() string { return fmt.Sprintf("line %d: %s", p.Line, p.Msg) }
+func (p Problem) String() string {
+	if p.Line == 0 {
+		return p.Msg
+	}
+	return fmt.Sprintf("line %d: %s", p.Line, p.Msg)
+}
 
 // Result is an overlay applied to a base in memory.
 type Result struct {
@@ -308,6 +313,7 @@ type Result struct {
 	InPlace  []string // changes whose result was already there
 	Problems []Problem
 	doc      document
+	redact   func(ojson.Path) bool
 }
 
 // Apply runs the overlay on base data. Every change is tried, so all
@@ -321,7 +327,21 @@ func (o *Overlay) Apply(data []byte) (*Result, error) {
 	r := &Result{Format: o.Format, doc: doc}
 	orig, _ := parse(o.Format, data)
 	r.Base = orig.root()
-	redact := o.Redactor()
+	// A secret moved or copied somewhere else stays a secret.
+	var carried []ojson.Path
+	byPath := o.Redactor()
+	redact := func(p ojson.Path) bool {
+		if byPath(p) {
+			return true
+		}
+		for _, c := range carried {
+			if within(p, c) {
+				return true
+			}
+		}
+		return false
+	}
+	r.redact = redact
 	for _, c := range o.Changes {
 		cur, exists := ojson.Get(doc.root(), c.Path)
 		fail := func(format string, args ...any) {
@@ -358,6 +378,9 @@ func (o *Overlay) Apply(data []byte) (*Result, error) {
 			fail("%s: %v", c.Describe(redact), err)
 			continue
 		}
+		if (c.Op == "rename" || c.Op == "copy") && (redact(c.Path) || containsSecret(c.Path, cur, redact)) {
+			carried = append(carried, c.To)
+		}
 		after, _ := doc.encode()
 		if bytes.Equal(before, after) {
 			r.InPlace = append(r.InPlace, c.Describe(redact))
@@ -365,10 +388,23 @@ func (o *Overlay) Apply(data []byte) (*Result, error) {
 			r.Applied = append(r.Applied, c.Describe(redact))
 		}
 	}
-	if len(r.Problems) == 0 {
-		if r.Out, err = doc.encode(); err != nil {
-			return nil, err
-		}
+	if len(r.Problems) > 0 {
+		return r, nil
+	}
+	if len(r.Applied) == 0 {
+		// Nothing changed, so the output is the vendor's file exactly.
+		r.Out = append([]byte(nil), data...)
+		return r, nil
+	}
+	if r.Out, err = doc.encode(); err != nil {
+		return nil, err
+	}
+	// Read the output back: it must hold exactly what was meant, or it isn't
+	// written at all.
+	back, err := parse(o.Format, r.Out)
+	if err != nil || !equal(plain(back.root()), plain(doc.root())) {
+		r.Out = nil
+		r.Problems = append(r.Problems, Problem{Msg: "the result can't be written safely in this format, so nothing is written; please report this with the overlay"})
 	}
 	return r, nil
 }

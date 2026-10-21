@@ -2,13 +2,19 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
 )
 
 // secretWords mark a key whose value is never printed, in any letter case.
-var secretWords = []string{"password", "passwd", "secret", "token", "credential", "apikey", "api_key", "api-key", "private_key", "privatekey", "access_key", "accesskey"}
+var secretWords = []string{"password", "passwd", "pass", "pwd", "secret", "token", "credential", "auth", "apikey", "api_key", "api-key",
+	"private", "access_key", "accesskey", "dsn", "cookie", "session", "signature"}
+
+// userinfo finds a user name and password inside a URL, such as
+// postgres://app:pw@db/app.
+var userinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.\-]*://)[^/@\s"]+@`)
 
 // Redactor reports whether a value at a path must not be printed: any
 // segment looks like a secret, or the overlay lists the path or a parent of
@@ -51,7 +57,7 @@ func show(p ojson.Path, v any, redact func(ojson.Path) bool) string {
 	if err != nil {
 		return fmt.Sprintf("%v", v)
 	}
-	s := string(b)
+	s := userinfo.ReplaceAllString(string(b), "${1}REDACTED@")
 	if r := []rune(s); len(r) > 80 {
 		s = string(r[:77]) + "..."
 	}
@@ -87,7 +93,7 @@ func containsSecret(p ojson.Path, v any, redact func(ojson.Path) bool) bool {
 // field: "~ a.b: 1 -> 2", "+ a.c: true", "- a.d".
 func (o *Overlay) Diff(r *Result) []string {
 	var out []string
-	walkDiff(nil, r.Base, r.Tree(), o.Redactor(), &out)
+	walkDiff(nil, r.Base, r.Tree(), r.redact, &out)
 	return out
 }
 

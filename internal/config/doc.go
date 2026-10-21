@@ -57,13 +57,17 @@ func parse(format string, data []byte) (document, error) {
 	if !utf8.Valid(data) {
 		return nil, fmt.Errorf("the file is not valid UTF-8")
 	}
+	crlf := bytes.Contains(data, []byte("\r\n"))
 	switch format {
 	case JSON:
 		v, err := ojson.Decode(data)
 		if err != nil {
 			return nil, fmt.Errorf("not valid JSON: %v", err)
 		}
-		return &treeDoc{format: JSON, v: v, indent: jsonIndent(data), newline: bytes.HasSuffix(data, []byte("\n"))}, nil
+		if depth(v) > maxDepth {
+			return nil, fmt.Errorf("the file is nested more than %d levels deep", maxDepth)
+		}
+		return &treeDoc{format: JSON, v: v, indent: jsonIndent(data), newline: bytes.HasSuffix(data, []byte("\n")), crlf: crlf}, nil
 	case YAML:
 		n, err := yamlite.Parse(data)
 		if err != nil {
@@ -72,19 +76,53 @@ func parse(format string, data []byte) (document, error) {
 		if n.Kind != yamlite.Map && n.Kind != yamlite.Seq {
 			return nil, fmt.Errorf("the YAML file must hold a mapping or a list")
 		}
-		return &treeDoc{format: YAML, v: yamlTree(n)}, nil
+		d := &treeDoc{format: YAML, keyStyle: map[string]int{}, crlf: crlf}
+		d.v = yamlTree(n, d.keyStyle)
+		if depth(d.v) > maxDepth {
+			return nil, fmt.Errorf("the file is nested more than %d levels deep", maxDepth)
+		}
+		return d, nil
 	case Env:
 		return parseEnv(data)
 	}
 	return nil, fmt.Errorf("unknown format %q (use json, yaml or env)", format)
 }
 
+// maxDepth bounds nesting, so hostile input can't make a diff crawl.
+const maxDepth = 200
+
+func depth(v any) int {
+	d := 0
+	switch t := v.(type) {
+	case *ojson.Object:
+		for _, k := range t.Keys() {
+			c, _ := t.Get(k)
+			d = max(d, depth(c))
+		}
+		return d + 1
+	case []any:
+		for _, it := range t {
+			d = max(d, depth(it))
+		}
+		return d + 1
+	}
+	return 0
+}
+
+// Key styles seen in a YAML file.
+const (
+	keyPlain  = 1
+	keyQuoted = 2
+)
+
 // treeDoc is a JSON or YAML document.
 type treeDoc struct {
-	format  string
-	v       any
-	indent  string // JSON: one level of indentation, "" for compact
-	newline bool   // JSON: the file ended with a newline
+	format   string
+	v        any
+	indent   string         // JSON: one level of indentation, "" for compact
+	newline  bool           // JSON: the file ended with a newline
+	crlf     bool           // lines ended with \r\n
+	keyStyle map[string]int // YAML: how each key was written, plain, quoted or both
 }
 
 func (d *treeDoc) root() any { return d.v }
@@ -98,6 +136,14 @@ func (d *treeDoc) set(p ojson.Path, v any) error {
 }
 
 func (d *treeDoc) del(p ojson.Path) error {
+	if list, ok := d.v.([]any); ok && len(p) == 1 {
+		i, err := strconv.Atoi(p[0])
+		if err != nil || i < 0 || i >= len(list) || strconv.Itoa(i) != p[0] {
+			return fmt.Errorf("%s not found", p)
+		}
+		d.v = append(list[:i:i], list[i+1:]...)
+		return nil
+	}
 	if !ojson.Delete(d.v, p) {
 		return fmt.Errorf("%s not found", p)
 	}
@@ -105,6 +151,9 @@ func (d *treeDoc) del(p ojson.Path) error {
 }
 
 func (d *treeDoc) rename(from, to ojson.Path) error {
+	if within(to, from) || within(from, to) {
+		return fmt.Errorf("can't rename a value into itself or into its own parent")
+	}
 	if _, ok := ojson.Get(d.v, to); ok {
 		return fmt.Errorf("%s already exists", to)
 	}
@@ -123,18 +172,35 @@ func (d *treeDoc) copy(from, to ojson.Path) error {
 	return d.set(to, ojson.Clone(v))
 }
 
+// within reports whether p is a or lies inside a.
+func within(p, a ojson.Path) bool {
+	if len(p) < len(a) {
+		return false
+	}
+	for i := range a {
+		if p[i] != a[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (d *treeDoc) encode() ([]byte, error) {
 	var b bytes.Buffer
 	var err error
 	if d.format == YAML {
-		err = writeYAML(&b, d.v)
+		err = writeYAML(&b, d.v, d.keyStyle)
 	} else {
 		err = writeJSON(&b, d.v, d.indent, "")
 		if err == nil && d.newline {
 			b.WriteByte('\n')
 		}
 	}
-	return b.Bytes(), err
+	out := b.Bytes()
+	if d.crlf {
+		out = bytes.ReplaceAll(out, []byte("\n"), []byte("\r\n"))
+	}
+	return out, err
 }
 
 // jsonIndent finds one level of indentation in a JSON file, or "" when the
@@ -214,7 +280,7 @@ type yamlPlain string
 
 // yamlTree converts parsed YAML into a value tree, keeping plain text
 // scalars as yamlPlain.
-func yamlTree(n *yamlite.Node) any {
+func yamlTree(n *yamlite.Node, keyStyle map[string]int) any {
 	switch n.Kind {
 	case yamlite.Scalar:
 		v := rules.NodeToJSON(n)
@@ -225,13 +291,20 @@ func yamlTree(n *yamlite.Node) any {
 	case yamlite.Seq:
 		out := []any{}
 		for _, it := range n.Items {
-			out = append(out, yamlTree(it))
+			out = append(out, yamlTree(it, keyStyle))
 		}
 		return out
 	case yamlite.Map:
 		o := ojson.NewObject()
 		for _, p := range n.Pairs {
-			o.Set(p.Key, yamlTree(p.Value))
+			if keyStyle != nil {
+				if p.KeyQuoted {
+					keyStyle[p.Key] |= keyQuoted
+				} else {
+					keyStyle[p.Key] |= keyPlain
+				}
+			}
+			o.Set(p.Key, yamlTree(p.Value, keyStyle))
 		}
 		return o
 	}
@@ -273,8 +346,17 @@ var (
 var yamlWords = map[string]bool{"true": true, "false": true, "null": true, "~": true,
 	"yes": true, "no": true, "on": true, "off": true, "y": true, "n": true}
 
-func yamlKey(k string) string {
-	if plainKey.MatchString(k) && !yamlWords[strings.ToLower(k)] && !jsonNumber.MatchString(k) {
+// yamlKey writes a key the way the file wrote it, so a reader that types
+// keys (80: is a number to most) sees the same key. New keys are left plain
+// only when no reader could take them for anything but text.
+func yamlKey(k string, keyStyle map[string]int) string {
+	switch keyStyle[k] {
+	case keyPlain:
+		return k
+	case keyQuoted:
+		return quote(k)
+	}
+	if plainKey.MatchString(k) && !yamlWords[strings.ToLower(k)] && !strings.ContainsAny(k[:1], "0123456789+-.") {
 		return k
 	}
 	return quote(k)
@@ -294,8 +376,8 @@ func yamlScalar(v any) (string, error) {
 	case yamlPlain:
 		return string(t), nil
 	case string:
-		if plainString.MatchString(t) && !strings.HasSuffix(t, " ") && !strings.Contains(t, ": ") &&
-			!strings.Contains(t, " #") && !yamlWords[strings.ToLower(t)] && !jsonNumber.MatchString(t) {
+		if plainString.MatchString(t) && !strings.HasSuffix(t, " ") && !strings.ContainsAny(t, ":#") &&
+			!yamlWords[strings.ToLower(t)] {
 			return t, nil
 		}
 		return quote(t), nil
@@ -303,26 +385,26 @@ func yamlScalar(v any) (string, error) {
 	return "", fmt.Errorf("unsupported value of type %T", v)
 }
 
-func writeYAML(b *bytes.Buffer, v any) error {
+func writeYAML(b *bytes.Buffer, v any, keyStyle map[string]int) error {
 	switch t := v.(type) {
 	case *ojson.Object:
 		if len(t.Keys()) == 0 {
 			b.WriteString("{}\n")
 			return nil
 		}
-		return yamlMap(b, t, "")
+		return yamlMap(b, t, "", keyStyle)
 	case []any:
 		if len(t) == 0 {
 			b.WriteString("[]\n")
 			return nil
 		}
-		return yamlSeq(b, t, "")
+		return yamlSeq(b, t, "", keyStyle)
 	}
 	return fmt.Errorf("a YAML file must hold a mapping or a list")
 }
 
 // yamlValue writes what follows "key:" or "- ".
-func yamlValue(b *bytes.Buffer, v any, indent string) error {
+func yamlValue(b *bytes.Buffer, v any, indent string, keyStyle map[string]int) error {
 	switch t := v.(type) {
 	case *ojson.Object:
 		if len(t.Keys()) == 0 {
@@ -330,14 +412,14 @@ func yamlValue(b *bytes.Buffer, v any, indent string) error {
 			return nil
 		}
 		b.WriteByte('\n')
-		return yamlMap(b, t, indent+"  ")
+		return yamlMap(b, t, indent+"  ", keyStyle)
 	case []any:
 		if len(t) == 0 {
 			b.WriteString(" []\n")
 			return nil
 		}
 		b.WriteByte('\n')
-		return yamlSeq(b, t, indent+"  ")
+		return yamlSeq(b, t, indent+"  ", keyStyle)
 	}
 	s, err := yamlScalar(v)
 	if err != nil {
@@ -347,21 +429,21 @@ func yamlValue(b *bytes.Buffer, v any, indent string) error {
 	return nil
 }
 
-func yamlMap(b *bytes.Buffer, o *ojson.Object, indent string) error {
+func yamlMap(b *bytes.Buffer, o *ojson.Object, indent string, keyStyle map[string]int) error {
 	for _, k := range o.Keys() {
 		child, _ := o.Get(k)
-		b.WriteString(indent + yamlKey(k) + ":")
-		if err := yamlValue(b, child, indent); err != nil {
+		b.WriteString(indent + yamlKey(k, keyStyle) + ":")
+		if err := yamlValue(b, child, indent, keyStyle); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func yamlSeq(b *bytes.Buffer, items []any, indent string) error {
+func yamlSeq(b *bytes.Buffer, items []any, indent string, keyStyle map[string]int) error {
 	for _, it := range items {
 		b.WriteString(indent + "-")
-		if err := yamlValue(b, it, indent); err != nil {
+		if err := yamlValue(b, it, indent, keyStyle); err != nil {
 			return err
 		}
 	}

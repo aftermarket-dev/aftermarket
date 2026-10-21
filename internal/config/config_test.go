@@ -151,7 +151,7 @@ func TestRandomDocumentsKeepEverythingElse(t *testing.T) {
 				if err := writeJSON(&src, root, []string{"", "  ", "\t", "    "}[rs.Intn(4)], ""); err != nil {
 					t.Fatal(err)
 				}
-			} else if err := writeYAML(&src, root); err != nil {
+			} else if err := writeYAML(&src, root, nil); err != nil {
 				t.Fatal(err)
 			}
 			o := &Overlay{Format: format, Changes: []Change{{Line: 1, Op: "set", Path: target, Value: "NEW value: #1"}}}
@@ -222,7 +222,7 @@ func TestYAMLWriterReadsBack(t *testing.T) {
 			continue
 		}
 		var b bytes.Buffer
-		if err := writeYAML(&b, v); err != nil {
+		if err := writeYAML(&b, v, nil); err != nil {
 			t.Fatal(err)
 		}
 		n, err := yamlite.Parse(b.Bytes())
@@ -265,12 +265,12 @@ changes:
 	}
 	want := `# Vendor defaults. Don't edit, upgrades overwrite this file.
 APP_PORT=8080
-export LOG_LEVEL=debug
+export LOG_LEVEL=debug   # info, debug or warn
 GREETING="hello world"
 
-DB_PASSWORD="s3cret with space"
+DB_PASSWORD='s3cret with space'
 NEW_NAME=keep-me
-GREETING_COPY="hello world"
+GREETING_COPY='hello world'
 FEATURE_X=true
 `
 	if string(r.Out) != want {
@@ -425,7 +425,10 @@ func TestTheBaseIsNeverWritten(t *testing.T) {
 	os.Mkdir(sub, 0o755)
 	wd, _ := os.Getwd()
 	rel, _ := filepath.Rel(wd, base)
-	for _, out := range []string{base, filepath.Join(dir, "link.json"), filepath.Join(sub, "..", "vendor.json"), rel} {
+	os.Link(base, filepath.Join(dir, "hard.json"))
+	os.Symlink(dir, filepath.Join(sub, "dirlink"))
+	for _, out := range []string{base, filepath.Join(dir, "link.json"), filepath.Join(sub, "..", "vendor.json"), rel,
+		filepath.Join(dir, "hard.json"), filepath.Join(sub, "dirlink", "vendor.json")} {
 		if err := WriteOut(base, out, []byte("{}")); err != ErrSameFile {
 			t.Errorf("%s: got %v, want ErrSameFile", out, err)
 		}
