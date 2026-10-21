@@ -28,7 +28,7 @@ Unknown keys are errors, so a typo never fails silently. `aftermarket patch chec
 | `max_body` | `1MiB` | A byte count, or a number with `B`, `KB`, `MB`, `GB` (powers of 1000) or `KiB`, `MiB`, `GiB` (powers of 1024). At most `1GiB`. |
 | `upstream_timeout` | `30s` | A Go duration such as `500ms`, `30s` or `2m`. |
 
-A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`. The same happens when a response body that a rule needs to change doesn't arrive in full within `upstream_timeout` after the headers, except in a dry run, which waits as long as it takes. A client whose request body a rule needs, and which stalls mid-body for longer than `upstream_timeout`, gets `408`. Bodies no rule needs are streamed and have no time limit.
+A body bigger than `max_body`, compressed or not, is passed on unchanged and logged as skipped. When an upstream doesn't send response headers within `upstream_timeout`, the client gets `504`. The same happens when a response body that a rule needs to change doesn't arrive in full within `upstream_timeout` after the headers, except in a dry run, which waits as long as it takes. A request body may arrive slowly, but each part must come within `upstream_timeout` of the last, whether a rule reads it or it is streamed through. A client that stalls mid-body for longer gets `408` and its connection is closed. When the upstream answers, or fails, before the client has sent its whole body, the answer closes the connection.
 
 ### when
 

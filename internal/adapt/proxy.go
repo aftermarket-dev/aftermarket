@@ -122,6 +122,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteHealth(w)
 		return
 	}
+	// Work on a copy: the server checks its own request's body when it
+	// decides whether to reuse the connection.
+	r = r.WithContext(r.Context())
 	pl, answered := p.plan(w, r)
 	if answered {
 		return
@@ -129,8 +132,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if pl != nil {
 		r = r.WithContext(context.WithValue(r.Context(), ctxKey{}, pl))
 	}
-	defer httpx.ForwardBody(w, r, p.opts.Config.UpstreamTimeout)()
-	p.rp.ServeHTTP(w, r)
+	out, done := httpx.ForwardBody(w, r, p.opts.Config.UpstreamTimeout)
+	defer done()
+	p.rp.ServeHTTP(w, out)
 }
 
 // skip records why a matched request passes through unchanged. The plan is
@@ -418,6 +422,7 @@ func noBody(method string, status int) bool {
 
 // modifyResponse rebuilds the response in the old shape.
 func (p *Proxy) modifyResponse(resp *http.Response) error {
+	httpx.CloseIfBodyUnfinished(resp)
 	pl, _ := resp.Request.Context().Value(ctxKey{}).(*plan)
 	if pl == nil || pl.skipped {
 		return nil

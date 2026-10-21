@@ -47,8 +47,14 @@ func (b *Body) Restore() io.ReadCloser {
 	if b.rest != nil {
 		return &multiCloser{Reader: io.MultiReader(bytes.NewReader(b.Raw), b.rest), c: b.rest}
 	}
-	return io.NopCloser(bytes.NewReader(b.Raw))
+	return memoryBody{bytes.NewReader(b.Raw)}
 }
+
+// memoryBody is a request body held in memory in full: the client's body
+// has already been read to its end.
+type memoryBody struct{ *bytes.Reader }
+
+func (memoryBody) Close() error { return nil }
 
 type multiCloser struct {
 	io.Reader
@@ -276,6 +282,7 @@ func WriteUpstreamError(w http.ResponseWriter, status int) {
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Aftermarket-Error", strconv.Itoa(status))
+	w.Header().Set("Content-Length", strconv.Itoa(len(msg)))
 	w.WriteHeader(status)
 	_, _ = w.Write([]byte(msg))
 }
@@ -352,7 +359,9 @@ func BufferRequestBody(w http.ResponseWriter, r *http.Request, max int64, d time
 	}
 	rc := http.NewResponseController(w)
 	deadlineSet := rc.SetReadDeadline(time.Now().Add(d)) == nil
-	br, err := ReadBody(r.Body, max)
+	// Each read must make progress within d, so an upload that is slow but
+	// moving isn't cut off.
+	br, err := ReadBody(&progressReader{ReadCloser: r.Body, ctl: rc, d: d, on: deadlineSet}, max)
 	var ne net.Error
 	if err != nil && !errors.Is(err, ErrTooLarge) && errors.As(err, &ne) && ne.Timeout() {
 		// The deadline stays: the server's last read of the stalled body,
@@ -366,16 +375,37 @@ func BufferRequestBody(w http.ResponseWriter, r *http.Request, max int64, d time
 	// On any other read error, what arrived is forwarded, so the upstream
 	// sees the same broken body the proxy saw.
 	r.Body = br.Restore()
+	if pr, ok := br.rest.(*progressReader); ok {
+		br.rest = pr.ReadCloser // the rest streams on, watched by ForwardBody
+		r.Body = br.Restore()
+	}
 	return nil
+}
+
+// progressReader moves the read deadline forward before every read.
+type progressReader struct {
+	io.ReadCloser
+	ctl *http.ResponseController
+	d   time.Duration
+	on  bool
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	if p.on {
+		_ = p.ctl.SetReadDeadline(time.Now().Add(p.d))
+	}
+	return p.ReadCloser.Read(b)
 }
 
 // WriteRequestTimeout answers a client whose body stalled.
 func WriteRequestTimeout(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	msg := "aftermarket: request body timed out\n"
 	w.Header().Set("X-Aftermarket-Error", "408")
 	w.Header().Set("Connection", "close")
+	w.Header().Set("Content-Length", strconv.Itoa(len(msg)))
 	w.WriteHeader(http.StatusRequestTimeout)
-	_, _ = w.Write([]byte("aftermarket: request body timed out\n"))
+	_, _ = w.Write([]byte(msg))
 }
 
 // SafeURL writes u for logs, reports and file headers: scheme, host and
@@ -408,38 +438,59 @@ func KeepRequestBody(w http.ResponseWriter) {
 // client stops sending it.
 var ErrClientBodyStalled = errors.New("the client's request body stopped arriving")
 
-// ForwardBody gets r's body ready to be streamed upstream, and is called
-// right before the reverse proxy. It keeps the body open while the answer
-// goes out (see KeepRequestBody), and gives up on a client whose body stops
-// arriving: every read must make progress within idle, so an upload that is
-// slow but moving is never cut off. The same limit covers the server's last
-// read when the body is closed before its end, as when the upstream can't
-// be reached, so a stalled client can't hold the connection. The caller
-// must call the returned function when its handler returns; after that the
-// connection's deadline is never touched.
-func ForwardBody(w http.ResponseWriter, r *http.Request, idle time.Duration) (done func()) {
+// ForwardBody gets the client's body ready to be streamed upstream, and is
+// called right before the reverse proxy with the request it will forward,
+// which must be a copy of the server's own (the server checks its own
+// request's body when deciding to reuse the connection). It keeps the body
+// open while the answer goes out (see KeepRequestBody), and gives up on a
+// client whose body stops arriving: every read must make progress within
+// idle, so an upload that is slow but moving is never cut off. A body
+// already held in memory needs neither. The returned request goes to the
+// proxy; done must be called when the handler returns. If the body hasn't
+// reached its end by then, done sends the answer and reads at most what
+// arrives within idle, so a stalled client can't hold the connection.
+func ForwardBody(w http.ResponseWriter, r *http.Request, idle time.Duration) (out *http.Request, done func()) {
 	KeepRequestBody(w)
-	if r.Body == nil || r.Body == http.NoBody || idle <= 0 {
-		return func() {}
+	if _, inMemory := r.Body.(memoryBody); r.Body == nil || r.Body == http.NoBody || inMemory || idle <= 0 {
+		return r, func() {}
 	}
-	b := &progressBody{ctl: http.NewResponseController(w), body: r.Body, idle: idle}
-	r.Body = b
-	return func() {
+	b := &progressBody{ctl: http.NewResponseController(w), body: r.Body, idle: idle, left: r.ContentLength}
+	out = r.WithContext(context.WithValue(r.Context(), bodyKey{}, b))
+	out.Body = b
+	return out, func() {
 		b.mu.Lock()
-		ended := b.ended
+		ended, sawEOF := b.ended, b.sawEOF
 		b.mu.Unlock()
 		if !ended {
-			// The body is closed here, inside the handler, as the server
-			// needs. The answer goes out first, and the rest of the body is
-			// read for at most idle.
+			// Inside the handler, as the server needs: send the answer, then
+			// close the body, which reads what is left for at most idle.
 			_ = b.ctl.Flush()
 			_ = b.ctl.SetReadDeadline(time.Now().Add(b.idle))
 			_ = b.body.Close()
 			_ = b.ctl.SetReadDeadline(time.Time{})
+		} else if !sawEOF {
+			// Every byte arrived but the server hasn't seen the end yet. It
+			// must see it here, before the handler returns, or its own read
+			// of the connection starts too late and clashes with the next
+			// request.
+			_ = b.body.Close()
 		}
 		b.mu.Lock()
 		b.handlerDone = true
 		b.mu.Unlock()
+	}
+}
+
+type bodyKey struct{}
+
+// CloseIfBodyUnfinished marks an answer to close the connection when the
+// client's body hasn't reached its end as the answer starts: the upstream
+// answered early, or turned the request away unread. Whatever the client
+// still sends is then read for a bounded time and the connection closed,
+// never parsed as a next request. Call it from ModifyResponse.
+func CloseIfBodyUnfinished(resp *http.Response) {
+	if b, ok := resp.Request.Context().Value(bodyKey{}).(*progressBody); ok && !b.isEnded() {
+		resp.Header.Set("Connection", "close")
 	}
 }
 
@@ -449,9 +500,17 @@ type progressBody struct {
 	idle time.Duration
 
 	mu          sync.Mutex
+	left        int64 // bytes still due by Content-Length, or -1
 	handlerDone bool
-	ended       bool // the body reached its end; the server reads the connection now
+	ended       bool // every byte of the body has arrived
+	sawEOF      bool // the server has seen the end and reads the connection now
 	stalled     bool
+}
+
+func (b *progressBody) isEnded() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ended
 }
 
 // deadline moves the connection's read deadline, while that is still the
@@ -467,12 +526,19 @@ func (b *progressBody) deadline(t time.Time) {
 func (b *progressBody) Read(p []byte) (int, error) {
 	b.deadline(time.Now().Add(b.idle))
 	n, err := b.body.Read(p)
-	if err == io.EOF {
-		// Clear the deadline before the server's own read of the connection
-		// can trip over it, then leave the connection alone.
+	b.mu.Lock()
+	if b.left >= 0 {
+		b.left -= int64(n)
+	}
+	end := err == io.EOF || (b.left == 0 && err == nil)
+	b.mu.Unlock()
+	if end {
+		// Every byte has arrived. Clear the deadline before the server's own
+		// read of the connection can trip over it, then leave it alone.
 		b.deadline(time.Time{})
 		b.mu.Lock()
 		b.ended = true
+		b.sawEOF = b.sawEOF || err == io.EOF
 		b.mu.Unlock()
 		return n, err
 	}

@@ -94,6 +94,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteHealth(w)
 		return
 	}
+	// Work on a copy: the server checks its own request's body when it
+	// decides whether to reuse the connection.
+	r = r.WithContext(r.Context())
 	st := &state{
 		id:       p.reqID.Add(1),
 		method:   r.Method,
@@ -137,8 +140,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 	ctx := context.WithValue(r.Context(), ctxKey{}, st)
-	defer httpx.ForwardBody(w, r, p.opts.Config.UpstreamTimeout)()
-	p.rp.ServeHTTP(w, r.WithContext(ctx))
+	out, done := httpx.ForwardBody(w, r.WithContext(ctx), p.opts.Config.UpstreamTimeout)
+	defer done()
+	p.rp.ServeHTTP(w, out)
 }
 
 func (p *Proxy) event(st *state, rule *rules.Rule, phase, kind string, status int, applied, notApplied []string, reason string) {
@@ -320,6 +324,7 @@ func rewritePath(rw *rules.Rewrite, escPath string, query url.Values) (string, s
 
 // modifyResponse applies response rules.
 func (p *Proxy) modifyResponse(resp *http.Response) error {
+	httpx.CloseIfBodyUnfinished(resp)
 	st, _ := resp.Request.Context().Value(ctxKey{}).(*state)
 	if st == nil || len(st.respRules) == 0 {
 		return nil

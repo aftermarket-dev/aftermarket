@@ -101,6 +101,9 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		httpx.WriteHealth(w)
 		return
 	}
+	// Work on a copy: the server checks its own request's body when it
+	// decides whether to reuse the connection.
+	req = req.WithContext(req.Context())
 	ex := &exchange{
 		id:     r.reqID.Add(1),
 		method: req.Method,
@@ -133,8 +136,9 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			req.Body = ex.reqTap
 		}
 	}
-	defer httpx.ForwardBody(w, req, r.opts.Config.UpstreamTimeout)()
-	r.rp.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), ctxKey{}, ex)))
+	out, done := httpx.ForwardBody(w, req.WithContext(context.WithValue(req.Context(), ctxKey{}, ex)), r.opts.Config.UpstreamTimeout)
+	defer done()
+	r.rp.ServeHTTP(w, out)
 }
 
 func (r *Recorder) rewrite(pr *httputil.ProxyRequest) {
@@ -156,6 +160,7 @@ func (r *Recorder) rewrite(pr *httputil.ProxyRequest) {
 }
 
 func (r *Recorder) modifyResponse(resp *http.Response) error {
+	httpx.CloseIfBodyUnfinished(resp)
 	ex, _ := resp.Request.Context().Value(ctxKey{}).(*exchange)
 	if ex == nil || !ex.record || !r.opts.Config.When.MatchResponse(resp.StatusCode, resp.Header.Get("Content-Type")) {
 		return nil
@@ -196,7 +201,11 @@ func (r *Recorder) errorHandler(w http.ResponseWriter, req *http.Request, err er
 			Reason:    reason,
 		})
 		if ex.record {
-			r.skip(ex, status, "the upstream failed, so there is no answer to record")
+			why := "the upstream failed, so there is no answer to record"
+			if status == http.StatusRequestTimeout {
+				why = "the client's request body stopped arriving"
+			}
+			r.skip(ex, status, why)
 		}
 	}
 	httpx.WriteUpstreamError(w, status)

@@ -37,3 +37,10 @@ func TestStalledAndSlowBodies(t *testing.T) {
 		return start(t, "limits: {upstream_timeout: 300ms}\n", up).url
 	})
 }
+
+// See CheckEarlyAnswerConnections in testkit.
+func TestEarlyAnswerConnections(t *testing.T) {
+	tk.CheckEarlyAnswerConnections(t, func(up string) string {
+		return start(t, "limits: {upstream_timeout: 300ms}\n", up).url
+	})
+}

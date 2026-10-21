@@ -431,3 +431,76 @@ func CheckStalledBodies(t testing.TB, start func(upstream string) string) {
 		t.Fatalf("slow upload: status %d, upstream got %q bytes", resp.StatusCode, body)
 	}
 }
+
+// CheckEarlyAnswerConnections checks what happens to a connection when the
+// upstream answers before the client has sent its whole body. start must
+// return the URL of a proxy for the given upstream, with upstream_timeout
+// set to 300ms. The answer must arrive whole and close the connection, so
+// nothing the client sends after it, still inside the body it announced,
+// is ever taken for a new request. Error answers keep exact framing.
+func CheckEarlyAnswerConnections(t testing.TB, start func(upstream string) string) {
+	t.Helper()
+	early := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = http.NewResponseController(w).EnableFullDuplex()
+		w.Header().Set("Content-Length", "5")
+		w.Write([]byte("early"))
+		w.(http.Flusher).Flush()
+		// A full-duplex handler must close the body itself before it
+		// returns; that reads what the client still sends, if it comes.
+		r.Body.Close()
+	}))
+	defer early.Close()
+	proxy := start(early.URL)
+
+	for _, c := range []struct{ name, head, body string }{
+		{"part of a small body sent", "POST /up HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n", strings.Repeat("a", 10000)},
+		{"part of a large body sent", "POST /up HTTP/1.1\r\nHost: x\r\nContent-Length: 10000000\r\n\r\n", strings.Repeat("a", 65536)},
+		{"Expect: 100-continue, no body sent", "POST /up HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 100\r\n\r\n", ""},
+	} {
+		conn, err := net.Dial("tcp", strings.TrimPrefix(proxy, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		io.WriteString(conn, c.head+c.body)
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			conn.Close()
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		got, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != 200 || string(got) != "early" || !resp.Close {
+			conn.Close()
+			t.Fatalf("%s: status %d, body %q, close %v; want the whole early answer, closing the connection", c.name, resp.StatusCode, got, resp.Close)
+		}
+		io.WriteString(conn, "GET /smuggled HTTP/1.1\r\nHost: x\r\n\r\n")
+		if extra, err := http.ReadResponse(br, nil); err == nil {
+			conn.Close()
+			t.Fatalf("%s: bytes inside the announced body were answered as a new request (%d)", c.name, extra.StatusCode)
+		}
+		conn.Close()
+	}
+
+	// A small body to an upstream that can't be reached: the 502 has a
+	// Content-Length, and closes the connection, since nobody read the body.
+	conn, err := net.Dial("tcp", strings.TrimPrefix(start("http://127.0.0.1:1"), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(conn)
+	io.WriteString(conn, "POST /up HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello")
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("upstream down: %v", err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	if resp.StatusCode != 502 || resp.ContentLength <= 0 || len(resp.TransferEncoding) > 0 || !resp.Close {
+		t.Fatalf("upstream down: status %d, length %d, encoding %v, close %v", resp.StatusCode, resp.ContentLength, resp.TransferEncoding, resp.Close)
+	}
+	if _, err := br.ReadByte(); err != io.EOF {
+		t.Fatalf("upstream down: the connection stayed open: %v", err)
+	}
+}
