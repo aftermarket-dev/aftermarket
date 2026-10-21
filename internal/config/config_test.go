@@ -370,7 +370,7 @@ changes:
 
 func TestLoadReportsEveryProblemInLineOrder(t *testing.T) {
 	_, err := Load([]byte(`version: 2
-format: toml
+format: ini
 redact: [a..b]
 changes:
   - set: {path: a}
@@ -388,7 +388,7 @@ extra: 1
 		t.Fatal("no error")
 	}
 	msg := err.Error()
-	want := []string{"line 1: version must be 1", "line 2: format must be json, yaml or env", "line 3: redact", "line 5: set needs value",
+	want := []string{"line 1: version must be 1", "line 2: format must be json, yaml, toml or env", "line 3: redact", "line 5: set needs value",
 		"line 6: set needs path", `line 7: unknown change "remove"`, "line 8: a change can expect a value or expect_absent",
 		"line 9: value", "line 10: each change is one of", "line 12: rename needs to", `line 13: copy doesn't take "value"`, `line 14: unknown key "extra"`}
 	last := -1
@@ -512,7 +512,7 @@ func TestFixtures(t *testing.T) {
 }
 
 func TestFormatOf(t *testing.T) {
-	for name, want := range map[string]string{"a.json": JSON, "A.YAML": YAML, "x.yml": YAML, ".env": Env, ".env.production": Env, "prod.env": Env, "x.toml": "", "env": ""} {
+	for name, want := range map[string]string{"a.json": JSON, "A.YAML": YAML, "x.yml": YAML, ".env": Env, ".env.production": Env, "prod.env": Env, "x.toml": TOML, "x.ini": "", "env": ""} {
 		if got := FormatOf(name); got != want {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}

@@ -119,6 +119,16 @@ func walkDiff(p ojson.Path, a, b any, redact func(ojson.Path) bool, out *[]strin
 		}
 		return
 	}
+	// Lists of the same length are compared item by item, so one changed
+	// field in a list of tables shows as that field.
+	al, alok := a.([]any)
+	bl, blok := b.([]any)
+	if alok && blok && len(al) == len(bl) {
+		for i := range al {
+			walkDiff(append(append(ojson.Path(nil), p...), fmt.Sprint(i)), al[i], bl[i], redact, out)
+		}
+		return
+	}
 	if equal(a, b) {
 		return
 	}

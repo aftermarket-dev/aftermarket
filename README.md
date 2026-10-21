@@ -163,7 +163,7 @@ line 8: set expects server.timeout to be 30, but the base has 60
 nothing was written
 ```
 
-It reads JSON, YAML and `.env` files. The example is [`examples/vendor-app`](examples/vendor-app), and the full format is in [docs/config.md](docs/config.md).
+It reads JSON, YAML, TOML and `.env` files. In TOML and `.env` files, changes are made on the file's own lines, so comments and every untouched line stay as they were. The examples are [`examples/vendor-app`](examples/vendor-app) and [`examples/vendor-app-toml`](examples/vendor-app-toml), and the full format is in [docs/config.md](docs/config.md).
 
 ## AfterHook in one example
 
@@ -350,7 +350,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - Captured parameters are always strings. A template that needs a number from the URL gets `"7"`, not `7`.
 - AfterHook checks on an interval instead of using the operating system's file notifications, so a change is seen within one interval (5 seconds by default), and a removal within two. It watches SQLite through the `sqlite3` command, which must be installed. In a folder, a file rewritten with the same size and modification time isn't noticed.
 - AfterGuard checks API keys and HTTP Basic logins; single sign-on (OAuth, OpenID Connect) isn't there yet. It has no attack signatures for SQL injection and the like, rate limits aren't shared between several AfterGuard processes, and it serves HTTP/1.1 only. When its table of rate-limit buckets is full of buckets in use, requests that need a new one get 429, so size `limit_table` above the number of addresses you expect in a minute or so.
-- AfterConfig doesn't read TOML yet, and doesn't keep comments when it writes YAML. The vendor's file keeps them.
+- AfterConfig doesn't keep comments when it writes YAML, or when a TOML change can't be made on the file's own lines, such as turning a table into a single value. The vendor's file keeps them.
 - Config files use a strict subset of YAML: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
 - One upstream per proxy. Run one proxy per service.
 - record redacts headers, query values and JSON fields. Values in a URL path and in bodies that aren't JSON are stored as sent, so keep those out with `when:`. Binary bodies aren't recorded at all.
@@ -364,7 +364,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.6.0 adds `aftermarket guard` (AfterGuard). 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.7.0 adds TOML to `aftermarket config`. 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 

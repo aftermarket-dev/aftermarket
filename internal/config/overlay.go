@@ -104,8 +104,8 @@ func Load(data []byte) (*Overlay, error) {
 		case "format":
 			if f, ok := str(p); ok {
 				f = strings.ToLower(f)
-				if f != JSON && f != YAML && f != Env {
-					errf(p.KeyLine, "format must be json, yaml or env")
+				if f != JSON && f != YAML && f != Env && f != TOML {
+					errf(p.KeyLine, "format must be json, yaml, toml or env")
 				}
 				o.Format = f
 			}
@@ -133,7 +133,7 @@ func Load(data []byte) (*Overlay, error) {
 	}
 	if o.Format == "" && o.Base != "" {
 		if o.Format = FormatOf(o.Base); o.Format == "" {
-			errf(root.Line, "can't tell the format of %q from its name; add format: json, yaml or env", o.Base)
+			errf(root.Line, "can't tell the format of %q from its name; add format: json, yaml, toml or env", o.Base)
 		}
 	}
 	switch {
@@ -429,6 +429,12 @@ func equal(a, b any) bool {
 		a = string(p)
 	}
 	if p, ok := b.(yamlPlain); ok {
+		b = string(p)
+	}
+	if p, ok := a.(tomlRaw); ok {
+		a = string(p)
+	}
+	if p, ok := b.(tomlRaw); ok {
 		b = string(p)
 	}
 	switch x := a.(type) {

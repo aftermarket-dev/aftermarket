@@ -6,7 +6,7 @@ import (
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
 )
 
-// ParseTree reads a JSON, YAML or .env file into a value tree of ojson
+// ParseTree reads a JSON, YAML, TOML or .env file into a value tree of ojson
 // values, for other tools that compare configuration.
 func ParseTree(format string, data []byte) (any, error) {
 	d, err := parse(format, data)

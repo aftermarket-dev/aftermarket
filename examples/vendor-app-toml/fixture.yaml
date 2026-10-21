@@ -1,0 +1,53 @@
+cases:
+  - name: the overlay applies to the 1.0 config
+    base: |
+      [server]
+      port = 8080
+      timeout = 30
+      workers = 4
+      [logging]
+      format = "text"
+      [telemetry]
+      enabled = true
+      [database]
+      password = "vendor-default"
+      pool = 10
+      [[jobs]]
+      name = "cleanup"
+      [[jobs]]
+      name = "report"
+      schedule = "0 6 * * 1"
+    expect: |
+      [server]
+      port = 8080
+      timeout = 120
+      workers = 8
+      [logging]
+      format = "json"
+      [telemetry]
+      enabled = false
+      [database]
+      password = "from-our-vault"
+      pool = 25
+      [[jobs]]
+      name = "cleanup"
+      [[jobs]]
+      name = "report"
+      schedule = "0 6 * * 0"
+
+  - name: an upgrade that changes the timeout default stops apply
+    base: |
+      [server]
+      timeout = 60
+      workers = 4
+      [logging]
+      format = "text"
+      [telemetry]
+      enabled = true
+      [database]
+      pool = 10
+      [[jobs]]
+      name = "cleanup"
+      [[jobs]]
+      schedule = "0 6 * * 1"
+    expect_error: "expects server.timeout to be 30, but the base has 60"

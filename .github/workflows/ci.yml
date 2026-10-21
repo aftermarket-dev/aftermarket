@@ -44,5 +44,7 @@ jobs:
           go run ./cmd/aftermarket config test --overlay examples/vendor-app/overlay.yaml --fixture examples/vendor-app/fixture.yaml
           go run ./cmd/aftermarket hook check --config examples/legacy-app/hook.yaml
           go run ./cmd/aftermarket hook test --config examples/legacy-app/hook.yaml --fixture examples/legacy-app/fixture.yaml
+          go run ./cmd/aftermarket config check --overlay examples/vendor-app-toml/overlay.yaml
+          go run ./cmd/aftermarket config test --overlay examples/vendor-app-toml/overlay.yaml --fixture examples/vendor-app-toml/fixture.yaml
           go run ./cmd/aftermarket guard check --config examples/legacy-admin/guard.yaml
           go run ./cmd/aftermarket guard test --config examples/legacy-admin/guard.yaml --fixture examples/legacy-admin/fixture.yaml

@@ -33,7 +33,7 @@ Exit codes: 0 when everything applies, 1 for problems in the overlay or with the
 ```yaml
 version: 1                       # optional; must be 1
 base: 1.0/config.json            # required; relative to the overlay's folder
-format: json                     # optional; json, yaml or env
+format: json                     # optional; json, yaml, toml or env
 redact: [database.url]           # optional; values never printed
 
 changes:
@@ -44,7 +44,7 @@ changes:
   - copy: {from: server.port, to: health.port}
 ```
 
-Without `format:`, the format comes from the base's name: `.json`, `.yaml` or `.yml`, and `.env` or names that start with `.env.` (such as `.env.production`). Unknown keys are errors, and `check` lists every problem with its line number.
+Without `format:`, the format comes from the base's name: `.json`, `.yaml` or `.yml`, `.toml`, and `.env` or names that start with `.env.` (such as `.env.production`). Unknown keys are errors, and `check` lists every problem with its line number.
 
 ### Changes
 
@@ -96,6 +96,18 @@ AfterConfig reads the YAML subset the other Aftermarket tools read: mappings, li
 - Values keep their order and meaning. An unquoted value the overlay doesn't touch is written back exactly as it was, so an unquoted `yes` stays an unquoted `yes` and means the same to any YAML reader. Keys keep their quotes or lack of them too, so `80:` stays a number to readers that type keys. A block (`|` or `>`) is written as a string with the same text, quoted when it spans lines.
 - New text values and keys that some YAML reader could take for something else, such as `on`, `no`, `2`, `1.5`, or anything with `:` or `#` in it, are quoted.
 
+### TOML
+
+AfterConfig reads TOML 1.0: tables, arrays of tables, dotted and quoted keys, inline tables, multi-line arrays, every kind of string, integers in decimal, hex, octal and binary, floats, booleans, and dates and times. A file TOML doesn't allow, such as one that sets a key twice or defines a table twice, is refused with a line number.
+
+- **Changes are made on the file's own lines.** A changed value is rewritten in place, keeping the key as written, the alignment and any `# comment` after it. Every line the overlay doesn't touch is written back byte for byte, comments and blank lines included.
+- A new key goes at the end of the table section it belongs to, as `key = value`, or as a dotted key such as `features.beta = true` when its table has no section of its own. A deleted key loses its line; a deleted table loses its sections. A rename within one table changes only the key on its line, and renaming a table rewrites its `[header]` lines.
+- A path into an inline table or an array, such as `server.tls.enabled` in `tls = { enabled = false }`, rewrites that one line with the new value inside it.
+- Paths work as in JSON: `jobs.1.schedule` is the `schedule` of the second `[[jobs]]`.
+- Dates and times keep their type: a date replaced with text in the same shape, such as `"2026-10-21T00:00:00Z"`, is written as a TOML date, not a string. Elsewhere, and in guards, dates read as text.
+- TOML has no null, and its integers are 64-bit, so `value: null` or a larger integer is refused at the change that asks for it.
+- The result is read back before it's written. If an edit can't be made on the lines, such as turning a table into a single value, the whole file is written again from its values instead, still with exactly the intended values, but without its comments. `inf` and `nan` are kept as written.
+
 ### .env
 
 One `KEY=value` per line, with optional `export `, `# comments` and blank lines. Values can be bare, `"double quoted"` (with `\n`, `\t`, `\"` and `\\` escapes) or `'single quoted'` (taken as written).
@@ -124,7 +136,7 @@ cases:
 
 Each case has a `base` in the overlay's format and exactly one of `expect`, the output compared by meaning, or `expect_error`, text that one of the problems must contain. `config test` exits 1 when any case fails, so an overlay can sit in CI next to the app it configures.
 
-## The example
+## The examples
 
 [`examples/vendor-app`](../examples/vendor-app) has a vendor's `config.json` at versions 1.0 and 1.1, an overlay with seven changes, and a fixture. On 1.0 every change applies. Version 1.1 raised the default timeout from 30 to 60 and switched logging to JSON itself, so on 1.1 apply stops at exactly those two lines and writes nothing:
 
@@ -135,3 +147,5 @@ examples/vendor-app/overlay.yaml: 2 of 7 change(s) can't be applied to examples/
   line 14: set expects logging.format to be "text", but the base has "json"
 nothing was written
 ```
+
+[`examples/vendor-app-toml`](../examples/vendor-app-toml) is the same upgrade with a vendor's `config.toml`, comments and arrays of tables included. On 1.0 only the seven changed lines differ from the vendor's file; on 1.1 apply stops at the same two lines.

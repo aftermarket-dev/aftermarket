@@ -104,6 +104,11 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - Not in 0.6.0: single sign-on, attack signatures, shared limits, WebSocket inspection, automatic certificates.
 - No new dependencies.
 
+### 0.7.0 TOML for AfterConfig (chosen by the owner Oct 21 2026; the "TOML later" of 0.4.0, details left to Claude)
+- `aftermarket config` reads and writes TOML 1.0 files: tables, arrays of tables, dotted and quoted keys, inline tables, every string kind, integers in all bases, floats, booleans, dates and times. Invalid TOML is refused with a line number.
+- Changes are made on the file's own lines, as for .env: comments, layout and every untouched line stay byte for byte; renames keep their line; dates keep their type. When a change can't be made on the lines, the file is written from its values, still exactly right but without comments.
+- Same promises as 0.4.0; `config diff` shows lists item by item. Example `examples/vendor-app-toml`. No new dependencies.
+
 ### Later, decided with the owner at the time
 Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
@@ -141,4 +146,5 @@ Afterlife and AfterTrace stay research; Afterlife only ever replaces documented 
 
 ## Next
 
-AfterGuard is done. What comes next (TOML for AfterConfig, AfterSchema, AfterBridge or something else) is decided with the owner; nothing is started until then.
+1. 0.7.0 TOML for AfterConfig, as above.
+2. After it: AfterSchema, AfterBridge, the CI flake or something else, decided with the owner; nothing is started until then.

@@ -26,8 +26,8 @@ const (
 	Env  = "env"
 )
 
-// FormatOf guesses a format from a file name: .json, .yaml, .yml, and .env
-// or names starting with .env (such as .env.production).
+// FormatOf guesses a format from a file name: .json, .yaml, .yml, .toml,
+// and .env or names starting with .env (such as .env.production).
 func FormatOf(name string) string {
 	base := strings.ToLower(filepath.Base(name))
 	switch {
@@ -35,6 +35,8 @@ func FormatOf(name string) string {
 		return JSON
 	case strings.HasSuffix(base, ".yaml"), strings.HasSuffix(base, ".yml"):
 		return YAML
+	case strings.HasSuffix(base, ".toml"):
+		return TOML
 	case strings.HasSuffix(base, ".env"), base == ".env", strings.HasPrefix(base, ".env."):
 		return Env
 	}
@@ -84,8 +86,10 @@ func parse(format string, data []byte) (document, error) {
 		return d, nil
 	case Env:
 		return parseEnv(data)
+	case TOML:
+		return parseTOMLDoc(data)
 	}
-	return nil, fmt.Errorf("unknown format %q (use json, yaml or env)", format)
+	return nil, fmt.Errorf("unknown format %q (use json, yaml, toml or env)", format)
 }
 
 // maxDepth bounds nesting, so hostile input can't make a diff crawl.
@@ -316,6 +320,8 @@ func yamlTree(n *yamlite.Node, keyStyle map[string]int) any {
 func plain(v any) any {
 	switch t := v.(type) {
 	case yamlPlain:
+		return string(t)
+	case tomlRaw:
 		return string(t)
 	case *ojson.Object:
 		o := ojson.NewObject()

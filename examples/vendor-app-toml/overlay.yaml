@@ -1,0 +1,25 @@
+# Our changes to the vendor's TOML config. The vendor file is never edited:
+# aftermarket config apply writes the result to a separate file, and keeps
+# the vendor's comments and layout on every line we don't change.
+version: 1
+base: 1.0/config.toml
+
+changes:
+  # Our reports run long. The vendor default was 30 seconds.
+  - set: {path: server.timeout, value: 120, expect: 30}
+
+  # Twice the vendor's workers for our traffic.
+  - set: {path: server.workers, value: 8, expect: 4}
+
+  # Our log pipeline reads JSON lines.
+  - set: {path: logging.format, value: json, expect: text}
+
+  # No telemetry leaves our network.
+  - set: {path: telemetry.enabled, value: false, expect: true}
+
+  # Our database password, and a bigger pool.
+  - set: {path: database.password, value: from-our-vault}
+  - set: {path: database.pool, value: 25, expect: 10}
+
+  # The weekly report runs on Sunday here.
+  - set: {path: jobs.1.schedule, value: "0 6 * * 0", expect: "0 6 * * 1"}

@@ -110,6 +110,10 @@ jobs:
             cp examples/vendor-app/overlay.yaml examples/vendor-app/fixture.yaml "$work/examples/vendor-app/"
             cp examples/vendor-app/1.0/config.json "$work/examples/vendor-app/1.0/"
             cp examples/vendor-app/1.1/config.json "$work/examples/vendor-app/1.1/"
+            mkdir -p "$work/examples/vendor-app-toml/1.0" "$work/examples/vendor-app-toml/1.1"
+            cp examples/vendor-app-toml/overlay.yaml examples/vendor-app-toml/fixture.yaml "$work/examples/vendor-app-toml/"
+            cp examples/vendor-app-toml/1.0/config.toml "$work/examples/vendor-app-toml/1.0/"
+            cp examples/vendor-app-toml/1.1/config.toml "$work/examples/vendor-app-toml/1.1/"
             mkdir -p "$work/examples/legacy-app/exports" "$work/examples/legacy-app/receiver"
             cp examples/legacy-app/hook.yaml examples/legacy-app/fixture.yaml examples/legacy-app/status.json "$work/examples/legacy-app/"
             cp examples/legacy-app/receiver/main.go "$work/examples/legacy-app/receiver/"
@@ -185,6 +189,13 @@ jobs:
           # On 1.1 the guards must stop apply and write nothing.
           if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --base examples/vendor-app/1.1/config.json --out smoke-11.json; then exit 1; fi
           [ ! -e smoke-11.json ]
+          # TOML: only the changed lines differ, and 1.1 stops apply too.
+          $PREFIX "$bin" config test --overlay examples/vendor-app-toml/overlay.yaml --fixture examples/vendor-app-toml/fixture.yaml
+          $PREFIX "$bin" config apply --overlay examples/vendor-app-toml/overlay.yaml --out smoke-config.toml
+          grep -q '^timeout = 120        # seconds' smoke-config.toml
+          grep -q '^# This file is replaced on every upgrade.' smoke-config.toml
+          if $PREFIX "$bin" config apply --overlay examples/vendor-app-toml/overlay.yaml --base examples/vendor-app-toml/1.1/config.toml --out smoke-11.toml; then exit 1; fi
+          [ ! -e smoke-11.toml ]
           $PREFIX "$bin" hook check --config examples/legacy-app/hook.yaml
           $PREFIX "$bin" hook test --config examples/legacy-app/hook.yaml --fixture examples/legacy-app/fixture.yaml
           # A one-shot run sets a baseline, then queues a change for a webhook
