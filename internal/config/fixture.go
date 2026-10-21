@@ -116,11 +116,14 @@ func (o *Overlay) Run(f *Fixture) []CaseResult {
 				break
 			}
 			got, _ := parse(o.Format, r.Out)
-			if got == nil || !equal(got.root(), want.root()) {
+			if got == nil || !exact(o.Format, got.root(), want.root()) {
 				// Listed field by field from expected to actual, secrets hidden.
 				var diff []string
 				if got != nil {
 					walkDiff(nil, want.root(), got.root(), r.redact, &diff)
+				}
+				if got != nil && len(diff) == 0 {
+					diff = append(diff, "the values match but a TOML type differs (a date against text, or an integer against a float)")
 				}
 				res.Problems = append(res.Problems, "output differs from expect: "+strings.Join(diff, "; "))
 			}

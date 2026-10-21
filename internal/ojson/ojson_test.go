@@ -2,6 +2,7 @@ package ojson
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -124,5 +125,18 @@ func TestCloneIsDeep(t *testing.T) {
 	Set(c, Path{"a", "b", "0"}, json.Number("2"))
 	if enc(t, doc) != `{"a":{"b":[1]}}` {
 		t.Fatal("clone shares state with the original")
+	}
+}
+
+// A body nested deeper than MaxDepth is refused like malformed JSON, rather
+// than exhausting the stack and killing the proxy.
+func TestDecodeRefusesDeepNesting(t *testing.T) {
+	deep := strings.Repeat("[", 2000000) + strings.Repeat("]", 2000000)
+	if _, err := Decode([]byte(deep)); err == nil {
+		t.Fatal("a value nested two million levels deep was accepted")
+	}
+	ok := strings.Repeat("[", MaxDepth) + strings.Repeat("]", MaxDepth)
+	if _, err := Decode([]byte(ok)); err != nil {
+		t.Fatalf("a value nested %d levels deep was refused: %v", MaxDepth, err)
 	}
 }

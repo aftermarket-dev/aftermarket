@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
@@ -99,12 +101,11 @@ func (d *tomlDoc) set(p ojson.Path, v any) error {
 	if err := tomlValueOK(v); err != nil {
 		return err
 	}
-	// A date replaced by text in the same shape stays a date.
 	if cur, ok := ojson.Get(d.tree, p); ok {
-		if _, isRaw := cur.(tomlRaw); isRaw {
-			if s, isStr := v.(string); isStr && tomlDateRe.MatchString(s) {
-				v = tomlRaw(s)
-			}
+		v = tomlKeepType(cur, v)
+		if tomlSame(cur, v) {
+			// Already there: the line keeps its spelling, comment and layout.
+			return nil
 		}
 	}
 	if err := d.tdoc().set(p, v); err != nil {
@@ -114,10 +115,30 @@ func (d *tomlDoc) set(p ojson.Path, v any) error {
 	return nil
 }
 
+// tomlKeepType keeps a value's TOML type when the overlay gives it in a
+// looser form: a date replaced by text that is a valid date of the same
+// kind stays a date, and a float set to a whole number stays a float.
+func tomlKeepType(cur, v any) any {
+	switch c := cur.(type) {
+	case tomlRaw:
+		if s, ok := v.(string); ok {
+			if k := tomlDateKind(string(c)); k != "" && tomlDateKind(s) == k {
+				return tomlRaw(s)
+			}
+		}
+	case json.Number:
+		if n, ok := v.(json.Number); ok && !tomlIsInt(c) && tomlIsInt(n) {
+			return json.Number(string(n) + ".0")
+		}
+	}
+	return v
+}
+
 func (d *tomlDoc) del(p ojson.Path) error {
 	if err := d.tdoc().del(p); err != nil {
 		return err
 	}
+	d.prune(p)
 	d.patch(func() bool { return d.patchDel(p) })
 	return nil
 }
@@ -126,6 +147,7 @@ func (d *tomlDoc) rename(from, to ojson.Path) error {
 	if err := d.tdoc().rename(from, to); err != nil {
 		return err
 	}
+	d.prune(from)
 	d.patch(func() bool {
 		if d.patchRenameKey(from, to) || d.patchRenameTable(from, to) {
 			return true
@@ -133,6 +155,33 @@ func (d *tomlDoc) rename(from, to ojson.Path) error {
 		return d.patchSet(to) && d.reparse() && d.patchDel(from)
 	})
 	return nil
+}
+
+// prune removes tables left empty above p that only existed because keys
+// inside them were written as dotted keys or under deeper headers. Their
+// text is gone with those keys, so the tree drops them too.
+func (d *tomlDoc) prune(p ojson.Path) {
+	for n := len(p) - 1; n > 0; n-- {
+		parent := p[:n]
+		o, ok := ojson.Get(d.tree, parent)
+		obj, isObj := o.(*ojson.Object)
+		if !ok || !isObj || len(obj.Keys()) > 0 || d.covering(parent) != nil {
+			return // inside a value written inline, it stays as written
+		}
+		if gp, _ := ojson.Get(d.tree, parent[:n-1]); n > 1 {
+			if _, inList := gp.([]any); inList {
+				return // an element of an array keeps its place
+			}
+		}
+		for _, s := range d.stmts {
+			if samePath(s.path, parent) {
+				return // written in the file as a table of its own
+			}
+		}
+		if d.tdoc().del(parent) != nil {
+			return
+		}
+	}
 }
 
 func (d *tomlDoc) copy(from, to ojson.Path) error {
@@ -165,15 +214,19 @@ func (d *tomlDoc) reparse() bool {
 
 func (d *tomlDoc) encode() ([]byte, error) {
 	if !d.rewrite {
-		if back, _, err := parseTOML(d.text); err == nil && equal(plain(back), plain(d.tree)) {
+		if back, _, err := parseTOML(d.text); err == nil && tomlSame(back, d.tree) {
 			return []byte(d.text), nil
 		}
+		d.rewrite = true
 	}
 	var b bytes.Buffer
 	if err := writeTOMLTable(&b, d.tree, nil); err != nil {
 		return nil, err
 	}
 	out := strings.TrimLeft(b.String(), "\n")
+	if strings.HasPrefix(d.original, bom) {
+		out = bom + out
+	}
 	if d.crlf {
 		out = strings.ReplaceAll(out, "\n", "\r\n")
 	}
@@ -293,7 +346,7 @@ func (d *tomlDoc) patchSet(p ojson.Path) bool {
 	}
 	line := tomlDotted(p[len(base):]) + " = " + text + d.eol()
 	// After the last key/value of that section, or right after its header.
-	at, indent := 0, ""
+	at, indent, found := 0, "", false
 	if best != nil {
 		at = d.lineEnd(best.end)
 	}
@@ -303,6 +356,22 @@ func (d *tomlDoc) patchSet(p ojson.Path) bool {
 			at = d.lineEnd(s.end)
 			lb := d.lineBegin(s.start)
 			indent = d.text[lb:s.start]
+			found = true
+		}
+	}
+	if best == nil && !found {
+		// The root has no keys yet: the new key goes before the first table
+		// and the comments that belong to it, below a comment that opens the
+		// file.
+		if hs := d.headers(); len(hs) > 0 {
+			hb := d.lineBegin(hs[0].start)
+			at = d.commentsAbove(hb, 0)
+			if at == 0 {
+				at = hb
+			}
+			line += d.eol()
+		} else {
+			at = len(d.text)
 		}
 	}
 	if at == len(d.text) && at > 0 && !strings.HasSuffix(d.text, "\n") {
@@ -322,9 +391,35 @@ func (d *tomlDoc) firstHeaderBefore(i int) bool {
 	return false
 }
 
+// commentsAbove returns where the run of comment lines directly above the
+// line starting at i begins, going no further up than floor. With no such
+// comments it returns i.
+func (d *tomlDoc) commentsAbove(i, floor int) int {
+	for i > floor {
+		prev := d.lineBegin(i - 1)
+		if prev < floor || !strings.HasPrefix(strings.TrimLeft(d.text[prev:i], " \t"), "#") {
+			break
+		}
+		i = prev
+	}
+	return i
+}
+
+// cut removes the text from..to; when that reaches the end of a file with
+// no final newline, the line breaks before it go too, so there still isn't
+// one.
+func (d *tomlDoc) cut(from, to int) {
+	if to == len(d.text) && from > 0 && !strings.HasSuffix(d.text, "\n") {
+		for from > 0 && (d.text[from-1] == '\n' || d.text[from-1] == '\r') {
+			from--
+		}
+	}
+	d.splice(from, to, "")
+}
+
 func (d *tomlDoc) patchDel(p ojson.Path) bool {
 	if s := d.find(stmtKV, p); s != nil {
-		d.splice(d.lineBegin(s.start), d.lineEnd(s.end), "")
+		d.cut(d.lineBegin(s.start), d.lineEnd(s.end))
 		return true
 	}
 	if s := d.covering(p); s != nil {
@@ -339,11 +434,12 @@ func (d *tomlDoc) patchDel(p ojson.Path) bool {
 		if !within(h.path, p) {
 			continue
 		}
-		to := len(d.text)
+		from, to := d.lineBegin(h.start), len(d.text)
 		if i+1 < len(hs) {
-			to = d.lineBegin(hs[i+1].start)
+			// Comments directly above the next header belong to it.
+			to = d.commentsAbove(d.lineBegin(hs[i+1].start), d.lineEnd(h.end))
 		}
-		spans = append(spans, span{d.lineBegin(h.start), to})
+		spans = append(spans, span{from, to})
 	}
 	for i := range d.stmts {
 		s := &d.stmts[i]
@@ -363,7 +459,7 @@ func (d *tomlDoc) patchDel(p ojson.Path) bool {
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].from > spans[j].from })
 	for _, sp := range spans {
-		d.splice(sp.from, sp.to, "")
+		d.cut(sp.from, sp.to)
 	}
 	return true
 }
@@ -496,14 +592,17 @@ func tomlNumber(n json.Number) (string, error) {
 	s := string(n)
 	if tomlIntRe.MatchString(s) {
 		if _, err := strconv.ParseInt(s, 10, 64); err != nil {
-			return "", fmt.Errorf("%s is too large for a TOML integer", s)
+			return "", fmt.Errorf("an integer too large for TOML (64 bits at most)")
 		}
 		return s, nil
 	}
 	if tomlFloatRe.MatchString(s) {
+		if f, err := strconv.ParseFloat(s, 64); err != nil && math.IsInf(f, 0) {
+			return "", fmt.Errorf("a number too large for a TOML float")
+		}
 		return s, nil
 	}
-	return "", fmt.Errorf("%s is not a number TOML can hold", s)
+	return "", fmt.Errorf("a number TOML can't hold")
 }
 
 // tomlInline writes a value on one line: inline tables and arrays.
@@ -565,9 +664,19 @@ func isArrayOfTables(v any) bool {
 // writeTOMLTable writes a whole document from its values: a table's own
 // keys first, then its sub-tables and arrays of tables as sections.
 func writeTOMLTable(b *bytes.Buffer, o *ojson.Object, path ojson.Path) error {
-	for _, k := range o.Keys() {
+	// TOML puts a table's own keys before its sections. To keep the keys in
+	// their order, a table that comes before a plain value is written inline.
+	keys := o.Keys()
+	lastPlain := -1
+	for i, k := range keys {
 		v, _ := o.Get(k)
-		if _, isObj := v.(*ojson.Object); isObj || isArrayOfTables(v) {
+		if _, isObj := v.(*ojson.Object); !isObj && !isArrayOfTables(v) {
+			lastPlain = i
+		}
+	}
+	for i, k := range keys {
+		v, _ := o.Get(k)
+		if _, isObj := v.(*ojson.Object); (isObj || isArrayOfTables(v)) && i > lastPlain {
 			continue
 		}
 		s, err := tomlInline(v)
@@ -576,7 +685,7 @@ func writeTOMLTable(b *bytes.Buffer, o *ojson.Object, path ojson.Path) error {
 		}
 		b.WriteString(tomlDotted(ojson.Path{k}) + " = " + s + "\n")
 	}
-	for _, k := range o.Keys() {
+	for _, k := range keys[lastPlain+1:] {
 		v, _ := o.Get(k)
 		sub := append(append(ojson.Path(nil), path...), k)
 		switch t := v.(type) {
@@ -603,7 +712,7 @@ func writeTOMLTable(b *bytes.Buffer, o *ojson.Object, path ojson.Path) error {
 // ---- reading ----
 
 var (
-	tomlDateRe = regexp.MustCompile(`^([0-9]{4}-[0-9]{2}-[0-9]{2}([Tt ][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?([Zz]|[+-][0-9]{2}:[0-9]{2})?)?|[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]+)?)?)$`)
+	tomlDateRe = regexp.MustCompile(`^(?:([0-9]{4})-([0-9]{2})-([0-9]{2}))?(?:(^|[Tt ])([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.[0-9]+)?(?:([Zz])|([+-])([0-9]{2}):([0-9]{2}))?)?$`)
 	tomlDecRe  = regexp.MustCompile(`^[+-]?(0|[1-9](_?[0-9])*)$`)
 	tomlHexRe  = regexp.MustCompile(`^0x[0-9A-Fa-f](_?[0-9A-Fa-f])*$`)
 	tomlOctRe  = regexp.MustCompile(`^0o[0-7](_?[0-7])*$`)
@@ -612,6 +721,114 @@ var (
 	tomlSpcRe  = regexp.MustCompile(`^[+-]?(inf|nan)$`)
 	tomlDayRe  = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 )
+
+const bom = "\uFEFF"
+
+// tomlDateKind says which of TOML's four date and time types s is, after
+// checking every field is in range: "offset", "datetime", "date" or "time".
+// Anything else gives "".
+func tomlDateKind(s string) string {
+	m := tomlDateRe.FindStringSubmatch(s)
+	if m == nil || s == "" {
+		return ""
+	}
+	num := func(x string) int { n, _ := strconv.Atoi(x); return n }
+	hasDate, hasTime := m[1] != "", m[5] != ""
+	if hasDate {
+		y, mo, da := num(m[1]), num(m[2]), num(m[3])
+		if mo < 1 || mo > 12 || da < 1 || da > time.Date(y, time.Month(mo)+1, 0, 0, 0, 0, 0, time.UTC).Day() {
+			return ""
+		}
+	}
+	if hasTime {
+		if num(m[5]) > 23 || num(m[6]) > 59 || num(m[7]) > 60 {
+			return ""
+		}
+	}
+	offset := m[8] != "" || m[9] != ""
+	if m[9] != "" && (num(m[10]) > 23 || num(m[11]) > 59) {
+		return ""
+	}
+	switch {
+	case hasDate && hasTime && m[4] == "":
+		return "" // a date and a time need T or a space between them
+	case !hasDate && m[4] != "":
+		return "" // a time can't start with T or a space
+	case hasDate && hasTime && offset:
+		return "offset"
+	case offset:
+		return "" // an offset needs a date and a time
+	case hasDate && hasTime:
+		return "datetime"
+	case hasDate:
+		return "date"
+	case hasTime:
+		return "time"
+	}
+	return ""
+}
+
+func tomlIsInt(n json.Number) bool { return tomlIntRe.MatchString(string(n)) }
+
+// tomlSame compares two TOML values strictly: by value, and by type, so a
+// date is not text and 30 is not 30.0. Key order doesn't count.
+func tomlSame(a, b any) bool {
+	if p, ok := a.(yamlPlain); ok {
+		a = string(p)
+	}
+	if p, ok := b.(yamlPlain); ok {
+		b = string(p)
+	}
+	switch x := a.(type) {
+	case tomlRaw:
+		y, ok := b.(tomlRaw)
+		return ok && x == y
+	case string:
+		y, ok := b.(string)
+		return ok && x == y
+	case json.Number:
+		y, ok := b.(json.Number)
+		if !ok || tomlIsInt(x) != tomlIsInt(y) {
+			return false
+		}
+		if tomlIsInt(x) {
+			xi, e1 := strconv.ParseInt(string(x), 10, 64)
+			yi, e2 := strconv.ParseInt(string(y), 10, 64)
+			return e1 == nil && e2 == nil && xi == yi
+		}
+		xf, e1 := strconv.ParseFloat(string(x), 64)
+		yf, e2 := strconv.ParseFloat(string(y), 64)
+		return e1 == nil && e2 == nil && xf == yf && math.Signbit(xf) == math.Signbit(yf)
+	case bool:
+		y, ok := b.(bool)
+		return ok && x == y
+	case *ojson.Object:
+		y, ok := b.(*ojson.Object)
+		if !ok || len(x.Keys()) != len(y.Keys()) {
+			return false
+		}
+		for _, k := range x.Keys() {
+			av, _ := x.Get(k)
+			bv, ok := y.Get(k)
+			if !ok || !tomlSame(av, bv) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		y, ok := b.([]any)
+		if !ok || len(x) != len(y) {
+			return false
+		}
+		for i := range x {
+			if !tomlSame(x[i], y[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return equal(a, b)
+}
 
 type tomlParser struct {
 	s       string
@@ -624,6 +841,7 @@ type tomlParser struct {
 	frozen  map[*ojson.Object]bool // inline tables
 	aot     map[*ojson.Object]map[string]bool
 	stmts   []tomlStmt
+	depth   int // arrays and inline tables open
 }
 
 type tomlErr struct {
@@ -644,6 +862,9 @@ func parseTOML(s string) (tree *ojson.Object, stmts []tomlStmt, err error) {
 	p := &tomlParser{s: s, root: ojson.NewObject(), defined: map[*ojson.Object]bool{}, dotted: map[*ojson.Object]bool{},
 		frozen: map[*ojson.Object]bool{}, aot: map[*ojson.Object]map[string]bool{}}
 	p.cur = p.root
+	if strings.HasPrefix(s, bom) {
+		p.i = len(bom) // a byte order mark is allowed and kept as it is
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			te, ok := r.(*tomlErr)
@@ -669,7 +890,7 @@ func (p *tomlParser) skipComment() {
 	if !p.eof() && p.s[p.i] == '#' {
 		for !p.eof() && p.s[p.i] != '\n' {
 			c := p.s[p.i]
-			if (c < 0x20 && c != '\t' && c != '\r') || c == 0x7f {
+			if (c < 0x20 && c != '\t' && c != '\r') || c == 0x7f || (c == '\r' && !strings.HasPrefix(p.s[p.i:], "\r\n")) {
 				p.fail("a control character in a comment")
 			}
 			p.i++
@@ -749,6 +970,9 @@ func (p *tomlParser) key() []string {
 			}
 			segs = append(segs, p.s[p.i:j])
 			p.i = j
+		}
+		if len(segs) > maxDepth {
+			p.fail("a key with more than %d parts", maxDepth)
 		}
 		save := p.i
 		p.skipWS()
@@ -923,21 +1147,6 @@ func (p *tomlParser) keyValue(t *ojson.Object, tpath ojson.Path, record bool) {
 	}
 }
 
-func (p *tomlParser) freeze(v any) {
-	switch t := v.(type) {
-	case *ojson.Object:
-		p.frozen[t] = true
-		for _, k := range t.Keys() {
-			c, _ := t.Get(k)
-			p.freeze(c)
-		}
-	case []any:
-		for _, c := range t {
-			p.freeze(c)
-		}
-	}
-}
-
 func (p *tomlParser) value() any {
 	if p.eof() {
 		p.fail("expected a value")
@@ -951,9 +1160,15 @@ func (p *tomlParser) value() any {
 		return p.multiLiteral()
 	case c == '\'':
 		return p.literalString()
-	case c == '[':
-		return p.array()
-	case c == '{':
+	case c == '[', c == '{':
+		p.depth++
+		if p.depth > maxDepth {
+			p.fail("values nested more than %d levels deep", maxDepth)
+		}
+		defer func() { p.depth-- }()
+		if c == '[' {
+			return p.array()
+		}
 		return p.inlineTable()
 	}
 	return p.scalar()
@@ -1020,7 +1235,6 @@ func (p *tomlParser) inlineTable() any {
 			p.i++
 		case '}':
 			p.i++
-			p.freeze(t)
 			return t
 		default:
 			p.fail("expected , or } in an inline table (inline tables stay on one line)")
@@ -1052,25 +1266,31 @@ func (p *tomlParser) scalar() any {
 		return true
 	case tok == "false":
 		return false
-	case tomlDateRe.MatchString(tok), tomlSpcRe.MatchString(tok):
+	case tomlDateKind(tok) != "", tomlSpcRe.MatchString(tok):
 		return tomlRaw(tok)
 	case tomlDecRe.MatchString(tok):
 		s := strings.TrimPrefix(strings.ReplaceAll(tok, "_", ""), "+")
 		if _, err := strconv.ParseInt(s, 10, 64); err != nil {
-			p.fail("%s is too large for a TOML integer", tok)
+			p.fail("an integer too large for TOML (64 bits at most)")
 		}
 		return json.Number(s)
 	case tomlHexRe.MatchString(tok), tomlOctRe.MatchString(tok), tomlBinRe.MatchString(tok):
 		base := map[byte]int{'x': 16, 'o': 8, 'b': 2}[tok[1]]
 		n, err := strconv.ParseInt(strings.ReplaceAll(tok[2:], "_", ""), base, 64)
 		if err != nil {
-			p.fail("%s is too large for a TOML integer", tok)
+			p.fail("an integer too large for TOML (64 bits at most)")
 		}
 		return json.Number(strconv.FormatInt(n, 10))
 	case tomlFltRe.MatchString(tok):
-		return json.Number(strings.TrimPrefix(strings.ReplaceAll(tok, "_", ""), "+"))
+		n := strings.TrimPrefix(strings.ReplaceAll(tok, "_", ""), "+")
+		if f, err := strconv.ParseFloat(n, 64); err != nil && math.IsInf(f, 0) {
+			p.fail("a number too large for a TOML float")
+		}
+		return json.Number(n)
 	}
-	p.fail("%q is not a TOML value", tok)
+	// The token isn't quoted in the message: it may be a secret written
+	// without quotes.
+	p.fail("not a TOML value (text needs quotes)")
 	return nil
 }
 

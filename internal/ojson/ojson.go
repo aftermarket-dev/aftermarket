@@ -66,7 +66,7 @@ func Decode(data []byte) (any, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
-	v, err := decodeValue(dec)
+	v, err := decodeValue(dec, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,14 @@ func Decode(data []byte) (any, error) {
 	return v, nil
 }
 
-func decodeValue(dec *json.Decoder) (any, error) {
+// MaxDepth bounds how deeply a JSON value may nest, so a hostile body can't
+// exhaust the stack. Deeper input is refused like any malformed JSON.
+const MaxDepth = 10000
+
+func decodeValue(dec *json.Decoder, depth int) (any, error) {
+	if depth > MaxDepth {
+		return nil, fmt.Errorf("JSON nested more than %d levels deep", MaxDepth)
+	}
 	tok, err := dec.Token()
 	if err != nil {
 		if err == io.EOF {
@@ -108,7 +115,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 				if !ok {
 					return nil, fmt.Errorf("object key is not a string")
 				}
-				v, err := decodeValue(dec)
+				v, err := decodeValue(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}
@@ -124,7 +131,7 @@ func decodeValue(dec *json.Decoder) (any, error) {
 		case '[':
 			arr := []any{}
 			for dec.More() {
-				v, err := decodeValue(dec)
+				v, err := decodeValue(dec, depth+1)
 				if err != nil {
 					return nil, err
 				}

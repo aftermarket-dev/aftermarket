@@ -402,7 +402,7 @@ func (o *Overlay) Apply(data []byte) (*Result, error) {
 	// Read the output back: it must hold exactly what was meant, or it isn't
 	// written at all.
 	back, err := parse(o.Format, r.Out)
-	if err != nil || !equal(plain(back.root()), plain(doc.root())) {
+	if err != nil || !exact(o.Format, back.root(), doc.root()) {
 		r.Out = nil
 		r.Problems = append(r.Problems, Problem{Msg: "the result can't be written safely in this format, so nothing is written; please report this with the overlay"})
 	}
@@ -422,6 +422,15 @@ func same(a, b any, format string) bool {
 		return err1 == nil && err2 == nil && as == bs
 	}
 	return equal(a, b)
+}
+
+// exact compares a result with what was meant. TOML keeps its types apart
+// (a date is not text, 30 is not 30.0); the other formats compare by meaning.
+func exact(format string, a, b any) bool {
+	if format == TOML {
+		return tomlSame(a, b)
+	}
+	return equal(plain(a), plain(b))
 }
 
 func equal(a, b any) bool {

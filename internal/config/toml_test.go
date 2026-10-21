@@ -386,7 +386,16 @@ func TestTOMLRandomChanges(t *testing.T) {
 		if !equal(plain(got), plain(want)) {
 			t.Fatalf("case %d, %s\nbase:\n%s\nout:\n%s\ngot  %s\nwant %s", n, change, base, r.Out, asJSON(t, got), asJSON(t, want))
 		}
-		if td, ok := r.doc.(*tomlDoc); ok && td.rewrite {
+		td, _ := r.doc.(*tomlDoc)
+		if td != nil && !td.rewrite && strings.HasPrefix(change, "  - set:") {
+			// A set edits one value; every comment line stays.
+			for _, l := range strings.Split(base, "\n") {
+				if strings.HasPrefix(l, "# note") && !strings.Contains(string(r.Out), l+"\n") {
+					t.Fatalf("case %d, %s lost the comment %q\nbase:\n%s\nout:\n%s", n, change, l, base, r.Out)
+				}
+			}
+		}
+		if td != nil && td.rewrite {
 			rewrites++
 			if os.Getenv("TOML_WHY") != "" && rewrites <= 12 {
 				t.Logf("rewrite: %s\nBASE:\n%s\nOUT:\n%s", change, base, r.Out)

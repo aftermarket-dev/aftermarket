@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.6.0
-- Recorded: 2026-10-21T15:18:56Z
+- Version: 0.7.0
+- Recorded: 2026-10-21T16:21:29Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-404 of 404 tests passed (race detector on).
+442 of 442 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -44,6 +44,8 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | examples/legacy-customer | TestRemovingEitherRuleBreaksTheClient | pass |
 | examples/vendor-app | TestFixturePasses | pass |
 | examples/vendor-app | TestUpgradeStopsWhereTheVendorChangedSomething | pass |
+| examples/vendor-app-toml | TestFixturePasses | pass |
+| examples/vendor-app-toml | TestUpgradeStopsAndCommentsStay | pass |
 | internal/adapt | TestAuditNeverContainsValues | pass |
 | internal/adapt | TestCheckReportsEveryProblemInLineOrder | pass |
 | internal/adapt | TestChunkedRequestBodyIsDroppedForGet | pass |
@@ -101,6 +103,28 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/config | TestRenameIntoItselfIsRefused | pass |
 | internal/config | TestSecretsAreNeverPrinted | pass |
 | internal/config | TestSecretsStayHiddenWhenMovedOrNamedDifferently | pass |
+| internal/config | TestTOMLChangesStayOnTheirLines | pass |
+| internal/config | TestTOMLKeepsLineEndings | pass |
+| internal/config | TestTOMLRandomChanges | pass |
+| internal/config | TestTOMLReads | pass |
+| internal/config | TestTOMLRefuses | pass |
+| internal/config | TestTOMLRefusesValuesItCantHold | pass |
+| internal/config | TestTOMLReviewHandWrittenRandom | pass |
+| internal/config | TestTOMLReview_F10_FallbackReorders | pass |
+| internal/config | TestTOMLReview_F11_FixtureCantTellDateFromString | pass |
+| internal/config | TestTOMLReview_F1_NoopRewritesSpelling | pass |
+| internal/config | TestTOMLReview_F1b_FloatBecomesInt | pass |
+| internal/config | TestTOMLReview_F2_SecretsInErrors | pass |
+| internal/config | TestTOMLReview_F3_DeepNestingCrash | pass |
+| internal/config | TestTOMLReview_F3b_InlineNestingQuadratic | pass |
+| internal/config | TestTOMLReview_F4_DeleteTableEatsNextComment | pass |
+| internal/config | TestTOMLReview_F5_DottedDeleteFallsBackToRewrite | pass |
+| internal/config | TestTOMLReview_F6_TextBecomesInvalidDate | pass |
+| internal/config | TestTOMLReview_F7_ReaderStrictness | pass |
+| internal/config | TestTOMLReview_F8_FinalNewlineAppears | pass |
+| internal/config | TestTOMLReview_F9_NewRootKeyAboveHeaderComment | pass |
+| internal/config | TestTOMLRewritesWhenItMust | pass |
+| internal/config | TestTOMLUnchangedAndTwice | pass |
 | internal/config | TestTheBaseIsNeverWritten | pass |
 | internal/config | TestTopLevelListDelete | pass |
 | internal/config | TestUnchangedFilesComeBackExactly | pass |
@@ -181,6 +205,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/hook | TestUntilNextWaitsForTheHead | pass |
 | internal/ojson | TestCloneIsDeep | pass |
 | internal/ojson | TestDecodeKeepsRealReplacementCharacters | pass |
+| internal/ojson | TestDecodeRefusesDeepNesting | pass |
 | internal/ojson | TestDecodeRejects | pass |
 | internal/ojson | TestParsePath | pass |
 | internal/ojson | TestPathOps | pass |
@@ -276,17 +301,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 52.9 µs | 304.9 µs | 22167 |
-| proxy, no rule matches | 152.3 µs | 1187.2 µs | 6566 |
-| proxy, both example rules applied | 228.9 µs | 2133.4 µs | 4474 |
-| adapt: direct to v2, one customer | 59.7 µs | 418.7 µs | 22783 |
-| adapt: v1 lookup rebuilt from v2 | 209.8 µs | 2341.4 µs | 4886 |
-| adapt: direct to v2, list | 58.0 µs | 392.8 µs | 20972 |
-| adapt: v1 list rebuilt from v2 | 267.3 µs | 2614.9 µs | 3971 |
-| record: v2 lookup saved to a fixture | 231.9 µs | 1877.5 µs | 4742 |
+| direct to upstream | 45.1 µs | 337.2 µs | 23952 |
+| proxy, no rule matches | 149.5 µs | 1155.1 µs | 5718 |
+| proxy, both example rules applied | 219.0 µs | 2139.6 µs | 5159 |
+| adapt: direct to v2, one customer | 52.0 µs | 379.0 µs | 20718 |
+| adapt: v1 lookup rebuilt from v2 | 222.9 µs | 2359.2 µs | 4699 |
+| adapt: direct to v2, list | 66.8 µs | 402.5 µs | 22907 |
+| adapt: v1 list rebuilt from v2 | 297.9 µs | 2606.8 µs | 4228 |
+| record: v2 lookup saved to a fixture | 249.4 µs | 1869.8 µs | 5239 |
 
-Added by the proxy when no rule matches: 99.4 µs at p50, 882.3 µs at p99.
-Added by the proxy with both example rules applied: 176.0 µs at p50, 1828.5 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 150.1 µs at p50, 1922.7 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 209.3 µs at p50, 2222.1 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 172.2 µs at p50, 1458.8 µs at p99.
+Added by the proxy when no rule matches: 104.4 µs at p50, 817.9 µs at p99.
+Added by the proxy with both example rules applied: 173.9 µs at p50, 1802.4 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 170.9 µs at p50, 1980.2 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 231.1 µs at p50, 2204.3 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 197.4 µs at p50, 1490.8 µs at p99.
