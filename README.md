@@ -9,12 +9,13 @@ Aftermarket is one program, `aftermarket`, with a subcommand per tool. The tools
 - **AfterTest** (`aftermarket record`) saves real traffic as test fixtures, with credentials and any values you list blanked out.
 - **AfterDiff** (`aftermarket replay`) sends those fixtures to two versions of a service and reports where the answers differ.
 - **AfterConfig** (`aftermarket config`) changes a vendor's config file through an overlay, without ever editing the file, and stops when an upgrade changed something your overlay relies on.
+- **AfterHook** (`aftermarket hook`) watches files, folders, HTTP endpoints and command output that change without telling anyone, and sends a signed webhook for each change.
 
 It's a single Go binary with no dependencies, licensed under Apache 2.0. Website: [aftermarket.dev](https://aftermarket.dev/).
 
 ## Which tool?
 
-Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites.
+Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know.
 
 ## AfterPatch in one example
 
@@ -163,6 +164,42 @@ nothing was written
 
 It reads JSON, YAML and `.env` files. The example is [`examples/vendor-app`](examples/vendor-app), and the full format is in [docs/config.md](docs/config.md).
 
+## AfterHook in one example
+
+A legacy app rewrites `status.json` when an order moves on, drops CSV exports in a folder, and keeps its orders in SQLite. It tells nobody. One config watches all three:
+
+```yaml
+version: 1
+state: hook-state.json
+webhooks:
+  - id: ops
+    url: https://hooks.example.com/aftermarket
+    secret_env: HOOK_SECRET
+sources:
+  - id: order-status
+    file: {path: status.json}
+    ignore: [updated_at]
+  - id: exports
+    folder: {path: exports, pattern: "*.csv"}
+  - id: orders-table
+    command:
+      run: [sqlite3, -json, app.db, "select id, status, total from orders order by id"]
+```
+
+```sh
+HOOK_SECRET=... aftermarket hook run --config hook.yaml
+```
+
+Each change becomes one signed POST, listed by field:
+
+```json
+{"id":"35e1242054585c9525bf477f","source":"orders-table","kind":"command","sequence":1,"time":"2026-10-21T12:25:52Z",
+ "changes":[{"op":"changed","path":"0.status","old":"open","new":"paid"},
+            {"op":"added","path":"1","new":{"id":1002,"status":"open","total":12}}]}
+```
+
+The first check only sets a baseline. A file rewritten with the same content, or a change to an ignored field, sends nothing, and a file still being written waits for the next check. While the receiver is down, events wait in the state file and are retried until delivered, in order, across restarts. The example is [`examples/legacy-app`](examples/legacy-app), with a receiver that checks signatures, and the full format is in [docs/hook.md](docs/hook.md).
+
 ## Install
 
 Download the archive for your system from the [latest release](https://github.com/aftermarket-dev/aftermarket/releases/latest), unpack it and put `aftermarket` on your PATH.
@@ -229,6 +266,10 @@ aftermarket config diff  --overlay overlay.yaml [--base FILE]
 aftermarket config apply --overlay overlay.yaml --out FILE [--base FILE]
 aftermarket config test  --overlay overlay.yaml --fixture fixture.yaml
 
+aftermarket hook check --config hook.yaml
+aftermarket hook run   --config hook.yaml [--once] [--dry-run] [--log FILE|-]
+aftermarket hook test  --config hook.yaml --fixture fixture.yaml
+
 aftermarket version
 ```
 
@@ -254,6 +295,7 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **Dry run changes zero bytes**, and never turns a slow answer into an error. The tests check both.
 - **Recording changes zero bytes too**, and streams. Credential headers and query keys are always saved as `REDACTED`, and so are the headers, query keys and JSON fields you list; the tests send secrets both ways and search the file for them. Values in a URL path and in bodies that aren't JSON are saved as sent. An exchange that can't be stored safely (too big, not text, compressed in a way record can't read, or cut off) still passes through and is logged as skipped.
 - **Replay doesn't change data unless you ask.** Only GET and HEAD are sent without `--include-writes`.
+- **hook delivers every change at least once.** Each change gives exactly one event, nothing is lost while the receiver is down or across restarts, and a repeat after a crash carries the same id. Values under secret-looking keys are sent as `REDACTED`, and the signing secret never leaves the environment.
 - **config never writes the vendor's file,** whatever path you give `--out`. A failed apply leaves the old output as it was, and applying twice gives the same bytes. Values under keys such as `password` or `token` are never printed.
 
 Recorded results, including the latency each tool adds, are in [test/results](test/results).
@@ -265,6 +307,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - adapt maps one old call to one new call. An old endpoint that needs several new calls (fan-out) isn't supported yet.
 - adapt doesn't rewrite `Location` headers or links inside bodies, so a redirect from the new API points at a new URL.
 - Captured parameters are always strings. A template that needs a number from the URL gets `"7"`, not `7`.
+- AfterHook checks on an interval instead of using the operating system's file notifications, so a change is seen within one interval (5 seconds by default). It watches SQLite through the `sqlite3` command, which must be installed.
 - AfterConfig doesn't read TOML yet, and doesn't keep comments when it writes YAML. The vendor's file keeps them.
 - Config files use a strict subset of YAML: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
 - One upstream per proxy. Run one proxy per service.
@@ -279,7 +322,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.4.0 adds `aftermarket config` (AfterConfig). 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.5.0 adds `aftermarket hook` (AfterHook). 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 

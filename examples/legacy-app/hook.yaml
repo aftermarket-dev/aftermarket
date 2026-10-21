@@ -1,0 +1,32 @@
+# AfterHook config for a legacy app that changes things but never says so.
+version: 1
+
+# What AfterHook has seen, and what it still has to send. Keep it: it's how
+# no event gets lost across restarts. It can hold file contents, so it's
+# written readable by its owner only.
+state: hook-state.json
+
+interval: 5s
+
+webhooks:
+  - id: ops
+    url: http://127.0.0.1:9900/events
+    # The signing secret comes from the environment, never from this file.
+    secret_env: HOOK_SECRET
+
+sources:
+  # The app rewrites this file when an order moves on.
+  - id: order-status
+    file: {path: status.json}
+    ignore: [updated_at]
+
+  # The nightly job drops CSV exports here.
+  - id: exports
+    folder: {path: exports, pattern: "*.csv"}
+    interval: 30s
+
+  # The app's own database, read through the sqlite3 command.
+  - id: orders-table
+    command:
+      run: [sqlite3, -json, app.db, "select id, status, total from orders order by id"]
+    interval: 15s

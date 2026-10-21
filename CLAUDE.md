@@ -80,8 +80,18 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - Example: a vendor app upgraded from 1.0 to 1.1, where the guard stops apply exactly where the vendor changed a default.
 - No new dependencies.
 
+### 0.5.0 AfterHook (approved Oct 21 2026; the three open choices left to Claude)
+`aftermarket hook`: watch places that change but never tell anyone, and send webhooks.
+- Sources: a file (field-level changes for JSON, YAML and .env), a folder (files added, changed, removed, optional name pattern), an HTTP endpoint polled (JSON by meaning), a command's output (SQLite through the `sqlite3` command, no driver).
+- Watching by checking on an interval (default 5s); no OS notifications, no dependency.
+- Delivery: signed JSON POSTs (HMAC-SHA256 with a secret from an environment variable), retries with growing waits until delivered; with max_attempts set, a dead-letter file after the last attempt (a fixed limit by default would have dropped events during a long outage). At least once: a state file keeps snapshots and the pending queue across restarts; event ids are derived from the change, so a repeat has the same id.
+- First check sets the baseline silently. A half-written file is never reported (unreadable structured content or content that changes between two reads waits for the next check).
+- Commands: `hook check`, `hook run [--once] [--dry-run]`, `hook test` with before/after fixtures. Secret-looking values are never printed or logged.
+- Promises: every change gives exactly one event; nothing is lost while the receiver is down or across restarts; an unchanged source sends nothing; a half-written file is never reported.
+- No new dependencies.
+
 ### Later, decided with the owner at the time
-AfterGuard (needs a written threat model first), AfterHook. Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
+AfterGuard (needs a written threat model first). Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
 ## Status
 
@@ -107,4 +117,5 @@ AfterGuard (needs a written threat model first), AfterHook. Afterlife and AfterT
 
 ## Next
 
-AfterConfig is done. What comes next (AfterGuard, AfterHook or something else) is decided with the owner; nothing is started until then. TOML for AfterConfig is the obvious small follow-up if asked.
+1. 0.5.0 AfterHook, as approved above.
+2. After it: AfterGuard, TOML for AfterConfig or something else, decided with the owner; nothing is started until then.

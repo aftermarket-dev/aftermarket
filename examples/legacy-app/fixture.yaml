@@ -1,0 +1,28 @@
+cases:
+  - name: a status change is one field
+    source: order-status
+    before: '{"order": 1001, "status": "open", "updated_at": "09:00"}'
+    after: '{"order": 1001, "status": "paid", "updated_at": "09:05"}'
+    expect:
+      - 'changed status: "open" -> "paid"'
+
+  - name: only the timestamp moved, so there is no event
+    source: order-status
+    before: '{"order": 1001, "status": "open", "updated_at": "09:00"}'
+    after: '{"updated_at": "09:10", "status": "open", "order": 1001.0}'
+    expect_none: true
+
+  - name: secrets never travel in an event
+    source: order-status
+    before: '{"status": "open", "customer": {"api_token": "old"}}'
+    after: '{"status": "open", "customer": {"api_token": "new"}}'
+    expect:
+      - 'changed customer.api_token: "REDACTED" -> "REDACTED"'
+
+  - name: a new row in the orders table
+    source: orders-table
+    before: '[{"id": 1, "status": "open", "total": 39.8}]'
+    after: '[{"id": 1, "status": "paid", "total": 39.8}, {"id": 2, "status": "open", "total": 12}]'
+    expect:
+      - 'changed 0.status: "open" -> "paid"'
+      - 'added 1: {"id":2,"status":"open","total":12}'

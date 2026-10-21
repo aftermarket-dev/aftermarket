@@ -42,3 +42,5 @@ jobs:
           go run ./cmd/aftermarket record check --config examples/customer-api/record.yaml
           go run ./cmd/aftermarket config check --overlay examples/vendor-app/overlay.yaml
           go run ./cmd/aftermarket config test --overlay examples/vendor-app/overlay.yaml --fixture examples/vendor-app/fixture.yaml
+          go run ./cmd/aftermarket hook check --config examples/legacy-app/hook.yaml
+          go run ./cmd/aftermarket hook test --config examples/legacy-app/hook.yaml --fixture examples/legacy-app/fixture.yaml

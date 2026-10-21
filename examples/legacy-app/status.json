@@ -1,0 +1,6 @@
+{
+  "order": 1001,
+  "status": "open",
+  "updated_at": "2026-10-21T09:00:00Z",
+  "customer": {"name": "Ada Lovelace", "api_token": "app-internal-token"}
+}

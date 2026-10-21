@@ -110,6 +110,9 @@ jobs:
             cp examples/vendor-app/overlay.yaml examples/vendor-app/fixture.yaml "$work/examples/vendor-app/"
             cp examples/vendor-app/1.0/config.json "$work/examples/vendor-app/1.0/"
             cp examples/vendor-app/1.1/config.json "$work/examples/vendor-app/1.1/"
+            mkdir -p "$work/examples/legacy-app/exports" "$work/examples/legacy-app/receiver"
+            cp examples/legacy-app/hook.yaml examples/legacy-app/fixture.yaml examples/legacy-app/status.json "$work/examples/legacy-app/"
+            cp examples/legacy-app/receiver/main.go "$work/examples/legacy-app/receiver/"
             if [ "$os" = windows ]; then
               (cd "$(dirname "$work")" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
             else
@@ -180,6 +183,8 @@ jobs:
           # On 1.1 the guards must stop apply and write nothing.
           if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --base examples/vendor-app/1.1/config.json --out smoke-11.json; then exit 1; fi
           [ ! -e smoke-11.json ]
+          $PREFIX "$bin" hook check --config examples/legacy-app/hook.yaml
+          $PREFIX "$bin" hook test --config examples/legacy-app/hook.yaml --fixture examples/legacy-app/fixture.yaml
           # The vendor's file is never written.
           if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --out examples/vendor-app/1.0/config.json; then exit 1; fi
 

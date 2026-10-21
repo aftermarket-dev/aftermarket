@@ -276,3 +276,37 @@ func TestConfigCommands(t *testing.T) {
 		t.Fatalf("bad overlay: %d %q", code, errs)
 	}
 }
+
+func TestHookCommands(t *testing.T) {
+	cfg := "../../examples/legacy-app/hook.yaml"
+	t.Setenv("HOOK_SECRET", "")
+	code, out, errs := runCLI("hook", "check", "--config", cfg)
+	if code != 0 || !strings.Contains(out, "3 source(s), 1 webhook(s)") || !strings.Contains(out, "which is not set here") {
+		t.Fatalf("check: %d %q %q", code, out, errs)
+	}
+	code, out, _ = runCLI("hook", "test", "--config", cfg, "--fixture", "../../examples/legacy-app/fixture.yaml")
+	if code != 0 || !strings.Contains(out, "4 case(s), 0 failed") {
+		t.Fatalf("test: %d %q", code, out)
+	}
+	if code, _, errs := runCLI("hook", "run", "--config", cfg, "--once"); code != 1 || !strings.Contains(errs, "$HOOK_SECRET, which is not set") {
+		t.Fatalf("run without the secret: %d %q", code, errs)
+	}
+	for _, args := range [][]string{{"hook"}, {"hook", "nope"}, {"hook", "check"}, {"hook", "test", "--config", cfg}} {
+		if code, _, _ := runCLI(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	// A one-shot run in a temporary folder sets the baseline and writes the state file.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "s.json"), []byte(`{"a":1}`), 0o644)
+	os.WriteFile(filepath.Join(dir, "hook.yaml"), []byte("state: st.json\nwebhooks:\n  - id: w\n    url: http://127.0.0.1:1/x\nsources:\n  - id: s\n    file: {path: s.json}\n"), 0o644)
+	if code, _, errs := runCLI("hook", "run", "--config", filepath.Join(dir, "hook.yaml"), "--once", "--log", ""); code != 0 {
+		t.Fatalf("run --once: %d %q", code, errs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "st.json")); err != nil {
+		t.Fatal("no state file after run --once")
+	}
+	if code, out, _ := runCLI("hook", "run", "--config", filepath.Join(dir, "hook.yaml"), "--once", "--dry-run", "--log", ""); code != 0 || out != "" {
+		t.Fatalf("dry run with nothing changed: %d %q", code, out)
+	}
+}
