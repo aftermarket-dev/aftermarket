@@ -60,7 +60,7 @@ Each source watches one thing.
   file: {path: status.json, format: json}
 ```
 
-`format` is `json`, `yaml`, `env` or `text`, and by default comes from the name (`.json`, `.yaml`, `.yml`, `.env`). For JSON, YAML and `.env` files, changes are listed by field, compared by meaning: key order, spacing and number formatting don't count, so a file rewritten with the same content gives no event. Other files are compared as text, line by line. A file that appears or disappears is reported too.
+`format` is `json`, `yaml`, `toml`, `env` or `text`, and by default comes from the name (`.json`, `.yaml`, `.yml`, `.toml`, `.env`). For JSON, YAML, TOML and `.env` files, changes are listed by field, compared by meaning: key order, spacing and number formatting don't count, so a file rewritten with the same content gives no event. Other files are compared as text, line by line. A file that appears or disappears is reported too.
 
 ### folder
 
@@ -103,8 +103,8 @@ The first time a source is checked, its current state becomes the baseline, and 
 A change is only reported when the source is complete:
 
 - A file is read twice, `settle` apart. If the two reads differ, it is still being written, and it's checked again next time.
-- A JSON, YAML or `.env` file that doesn't read is treated the same way. A half-written JSON document never reads; YAML and `.env` can read when cut short, so the next rule covers them.
-- A source that disappears, or a JSON, YAML or `.env` file that loses more than half its size, is only reported when the next check sees the same thing. That check comes after the source's interval, or after a second if the interval is longer. A file replaced by delete-and-write, or rewritten in two steps, gives no event when it ends up as it was.
+- A JSON, YAML, TOML or `.env` file that doesn't read is treated the same way. A half-written JSON document never reads; YAML, TOML and `.env` can read when cut short, so the next rule covers them.
+- A source that disappears, or a JSON, YAML, TOML or `.env` file that loses more than half its size, is only reported when the next check sees the same thing. That check comes after the source's interval, or after a second if the interval is longer. A file replaced by delete-and-write, or rewritten in two steps, gives no event when it ends up as it was.
 - In a folder, a new or changed file must keep the same size and modification time across `settle` before it's hashed. A file still being written is left out until it settles, and the rest of the folder is reported as usual.
 
 ## Events

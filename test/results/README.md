@@ -3,12 +3,12 @@
 Written by `go run ./tools/record`. Do not edit by hand.
 
 - Version: 0.7.0
-- Recorded: 2026-10-21T16:21:29Z
+- Recorded: 2026-10-21T16:25:11Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-442 of 442 tests passed (race detector on).
+444 of 444 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -201,6 +201,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/hook | TestSecretsStayOut | pass |
 | internal/hook | TestSendToNamesEachWebhookOnce | pass |
 | internal/hook | TestStoppingMidSendKeepsTheEvent | pass |
+| internal/hook | TestTOMLFilesAreWatchedByField | pass |
 | internal/hook | TestTruncatedStructuredFilesWait | pass |
 | internal/hook | TestUntilNextWaitsForTheHead | pass |
 | internal/ojson | TestCloneIsDeep | pass |
@@ -301,17 +302,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 45.1 µs | 337.2 µs | 23952 |
-| proxy, no rule matches | 149.5 µs | 1155.1 µs | 5718 |
-| proxy, both example rules applied | 219.0 µs | 2139.6 µs | 5159 |
-| adapt: direct to v2, one customer | 52.0 µs | 379.0 µs | 20718 |
-| adapt: v1 lookup rebuilt from v2 | 222.9 µs | 2359.2 µs | 4699 |
-| adapt: direct to v2, list | 66.8 µs | 402.5 µs | 22907 |
-| adapt: v1 list rebuilt from v2 | 297.9 µs | 2606.8 µs | 4228 |
-| record: v2 lookup saved to a fixture | 249.4 µs | 1869.8 µs | 5239 |
+| direct to upstream | 49.2 µs | 276.0 µs | 28048 |
+| proxy, no rule matches | 164.9 µs | 1232.2 µs | 6072 |
+| proxy, both example rules applied | 213.9 µs | 1942.4 µs | 4562 |
+| adapt: direct to v2, one customer | 56.2 µs | 376.2 µs | 21333 |
+| adapt: v1 lookup rebuilt from v2 | 231.7 µs | 2428.6 µs | 4653 |
+| adapt: direct to v2, list | 74.4 µs | 452.4 µs | 19938 |
+| adapt: v1 list rebuilt from v2 | 293.2 µs | 2563.7 µs | 5451 |
+| record: v2 lookup saved to a fixture | 233.5 µs | 1701.2 µs | 4721 |
 
-Added by the proxy when no rule matches: 104.4 µs at p50, 817.9 µs at p99.
-Added by the proxy with both example rules applied: 173.9 µs at p50, 1802.4 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 170.9 µs at p50, 1980.2 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 231.1 µs at p50, 2204.3 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 197.4 µs at p50, 1490.8 µs at p99.
+Added by the proxy when no rule matches: 115.7 µs at p50, 956.2 µs at p99.
+Added by the proxy with both example rules applied: 164.7 µs at p50, 1666.4 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 175.5 µs at p50, 2052.4 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 218.8 µs at p50, 2111.3 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 177.3 µs at p50, 1325.0 µs at p99.

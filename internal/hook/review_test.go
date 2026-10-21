@@ -138,6 +138,7 @@ func TestTruncatedStructuredFilesWait(t *testing.T) {
 	for _, c := range []struct{ name, full, cut string }{
 		{"s.yaml", "a: 1\nb: 2\nc: 3\n", "a: 1\n"},
 		{"s.env", "A=1\nB=2\n", ""},
+		{"s.toml", "a = 1\nb = 2\nc = 3\n", "a = 1\n"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := setup(t, fmt.Sprintf("  - id: s\n    file: {path: %s}\n", c.name))
@@ -380,5 +381,36 @@ func TestAQueuedEventWithoutABodyIsRefused(t *testing.T) {
 	os.WriteFile(e.cfg.State, []byte(`{"version":1,"sources":{},"queue":[{"webhook":"w","event_id":"x"}]}`), 0o600)
 	if _, err := New(e.cfg, Options{Env: func(string) string { return "test-secret" }}); err == nil || !strings.Contains(err.Error(), "move it aside") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+// 0.7.0: a .toml file is watched field by field, like JSON and YAML, and
+// values under secret-looking keys never leave as written.
+func TestTOMLFilesAreWatchedByField(t *testing.T) {
+	e := setup(t, "  - id: s\n    file: {path: s.toml}\n")
+	e.write(t, "s.toml", "# vendor\n[db]\nport = 5432\npassword = \"hunter2\"\nwhen = 2026-10-21\n")
+	h := e.hook(t)
+	e.round(t, h)
+	e.write(t, "s.toml", "# vendor, edited\n[db]\nport = 5433   # moved\npassword = \"hunter3\"\nwhen = 2026-10-21\n")
+	ev := e.round(t, h)
+	if len(ev) != 1 {
+		t.Fatalf("want one event, got %+v", ev)
+	}
+	s := eventsJSON(t, ev)
+	if !strings.Contains(s, `"path":"db.port"`) || !strings.Contains(s, `"path":"db.password"`) || len(ev[0].Changes) != 2 {
+		t.Fatalf("want db.port and db.password, got %s", s)
+	}
+	if strings.Contains(s, "hunter") || !strings.Contains(s, "REDACTED") {
+		t.Fatalf("a secret left as written: %s", s)
+	}
+	// Comments and spacing alone are no change.
+	e.write(t, "s.toml", "[db]\nport=5433\npassword=\"hunter3\"\nwhen=2026-10-21\n")
+	if ev := e.round(t, h); len(ev) != 0 {
+		t.Fatalf("a rewrite with the same values gave %+v", ev)
+	}
+	// Any file name can be read as TOML when the config says so.
+	e2 := setup(t, "  - id: s\n    file: {path: x.conf, format: toml}\n")
+	if e2.cfg.Sources[0].Format != "toml" {
+		t.Fatalf("format: toml read as %q", e2.cfg.Sources[0].Format)
 	}
 }

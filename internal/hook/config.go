@@ -429,8 +429,8 @@ func (l *loader) source(n *yamlite.Node, c *Config) *Source {
 		s.Path = l.resolve(p)
 		if f, has := get("format"); has {
 			f = strings.ToLower(f)
-			if f != config.JSON && f != config.YAML && f != config.Env && f != "text" {
-				l.errf(spec.Line, "format must be json, yaml, env or text")
+			if f != config.JSON && f != config.YAML && f != config.TOML && f != config.Env && f != "text" {
+				l.errf(spec.Line, "format must be json, yaml, toml, env or text")
 				ok = false
 			}
 			s.Format = f
