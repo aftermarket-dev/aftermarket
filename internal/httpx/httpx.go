@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
@@ -265,6 +266,10 @@ func UpstreamReason(err error) (int, string) {
 
 // WriteUpstreamError answers the client when the upstream failed.
 func WriteUpstreamError(w http.ResponseWriter, status int) {
+	if status == http.StatusRequestTimeout {
+		WriteRequestTimeout(w) // the client's body stalled, not the upstream
+		return
+	}
 	msg := "aftermarket: upstream unreachable\n"
 	if status == http.StatusGatewayTimeout {
 		msg = "aftermarket: upstream timed out\n"
@@ -397,4 +402,117 @@ func SafeURL(u *url.URL) string {
 // and drop the connection with a logged panic.
 func KeepRequestBody(w http.ResponseWriter) {
 	_ = http.NewResponseController(w).EnableFullDuplex()
+}
+
+// ErrClientBodyStalled is returned by a body from ForwardBody when the
+// client stops sending it.
+var ErrClientBodyStalled = errors.New("the client's request body stopped arriving")
+
+// ForwardBody gets r's body ready to be streamed upstream, and is called
+// right before the reverse proxy. It keeps the body open while the answer
+// goes out (see KeepRequestBody), and gives up on a client whose body stops
+// arriving: every read must make progress within idle, so an upload that is
+// slow but moving is never cut off. The same limit covers the server's last
+// read when the body is closed before its end, as when the upstream can't
+// be reached, so a stalled client can't hold the connection. The caller
+// must call the returned function when its handler returns; after that the
+// connection's deadline is never touched.
+func ForwardBody(w http.ResponseWriter, r *http.Request, idle time.Duration) (done func()) {
+	KeepRequestBody(w)
+	if r.Body == nil || r.Body == http.NoBody || idle <= 0 {
+		return func() {}
+	}
+	b := &progressBody{ctl: http.NewResponseController(w), body: r.Body, idle: idle}
+	r.Body = b
+	return func() {
+		b.mu.Lock()
+		ended := b.ended
+		b.mu.Unlock()
+		if !ended {
+			// The body is closed here, inside the handler, as the server
+			// needs. The answer goes out first, and the rest of the body is
+			// read for at most idle.
+			_ = b.ctl.Flush()
+			_ = b.ctl.SetReadDeadline(time.Now().Add(b.idle))
+			_ = b.body.Close()
+			_ = b.ctl.SetReadDeadline(time.Time{})
+		}
+		b.mu.Lock()
+		b.handlerDone = true
+		b.mu.Unlock()
+	}
+}
+
+type progressBody struct {
+	ctl  *http.ResponseController
+	body io.ReadCloser
+	idle time.Duration
+
+	mu          sync.Mutex
+	handlerDone bool
+	ended       bool // the body reached its end; the server reads the connection now
+	stalled     bool
+}
+
+// deadline moves the connection's read deadline, while that is still the
+// body's to decide.
+func (b *progressBody) deadline(t time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.handlerDone && !b.ended {
+		_ = b.ctl.SetReadDeadline(t)
+	}
+}
+
+func (b *progressBody) Read(p []byte) (int, error) {
+	b.deadline(time.Now().Add(b.idle))
+	n, err := b.body.Read(p)
+	if err == io.EOF {
+		// Clear the deadline before the server's own read of the connection
+		// can trip over it, then leave the connection alone.
+		b.deadline(time.Time{})
+		b.mu.Lock()
+		b.ended = true
+		b.mu.Unlock()
+		return n, err
+	}
+	var ne net.Error
+	if err != nil && errors.As(err, &ne) && ne.Timeout() {
+		b.mu.Lock()
+		b.stalled = true
+		b.mu.Unlock()
+		return n, ErrClientBodyStalled
+	}
+	return n, err
+}
+
+// Close doesn't read the rest of the body: the transport closes it when the
+// upstream can't be reached, and reading a stalled client there would hold
+// up the 502. The function ForwardBody returned closes it once the answer
+// has gone out.
+func (b *progressBody) Close() error { return nil }
+
+// ForwardError decides how to answer when forwarding r failed with err: a
+// status and a reason for the log, or answer false when the client went
+// away and there is nobody to answer. A client body that stalled gets 408
+// even though its read error also ended the request's context. When the
+// body hasn't reached its end, the answer closes the connection, so the
+// server reads at most what arrives before the deadline and then lets go.
+func ForwardError(w http.ResponseWriter, r *http.Request, err error) (status int, reason string, answer bool) {
+	if b, ok := r.Body.(*progressBody); ok {
+		b.mu.Lock()
+		stalled, ended := b.stalled, b.ended
+		b.mu.Unlock()
+		if !ended {
+			w.Header().Set("Connection", "close")
+		}
+		if stalled {
+			return http.StatusRequestTimeout, "request body stopped arriving for upstream_timeout", true
+		}
+	}
+	if ClientGone(r) {
+		return 0, "", false
+	}
+	status, reason = UpstreamReason(err)
+	return status, reason, true
 }

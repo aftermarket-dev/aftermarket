@@ -133,7 +133,7 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			req.Body = ex.reqTap
 		}
 	}
-	httpx.KeepRequestBody(w)
+	defer httpx.ForwardBody(w, req, r.opts.Config.UpstreamTimeout)()
 	r.rp.ServeHTTP(w, req.WithContext(context.WithValue(req.Context(), ctxKey{}, ex)))
 }
 
@@ -181,10 +181,10 @@ func (r *Recorder) modifyResponse(resp *http.Response) error {
 }
 
 func (r *Recorder) errorHandler(w http.ResponseWriter, req *http.Request, err error) {
-	if httpx.ClientGone(req) {
-		return
+	status, reason, answer := httpx.ForwardError(w, req, err)
+	if !answer {
+		return // the client went away; nobody to answer
 	}
-	status, reason := httpx.UpstreamReason(err)
 	if ex, _ := req.Context().Value(ctxKey{}).(*exchange); ex != nil {
 		r.opts.Audit.Write(audit.Event{
 			Event:     audit.UpstreamError,

@@ -30,3 +30,10 @@ func TestHealthCheckWithBody(t *testing.T) {
 	h := start(t, "", "http://upstream.invalid")
 	tk.CheckHealthWithBody(t, h.url, "/_aftermarket/healthz")
 }
+
+// See TestStalledAndSlowBodies in patch.
+func TestStalledAndSlowBodies(t *testing.T) {
+	tk.CheckStalledBodies(t, func(up string) string {
+		return start(t, "limits: {upstream_timeout: 300ms}\n", up).url
+	})
+}

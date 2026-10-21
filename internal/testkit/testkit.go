@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -362,5 +363,71 @@ func CheckHealthWithBody(t testing.TB, base, path string) {
 			}
 		}
 		conn.Close()
+	}
+}
+
+// CheckStalledBodies runs a proxy's answers to client bodies that stop or
+// crawl. start must return the URL of a proxy for the given upstream, with
+// upstream_timeout set to 300ms. A body that stops must be answered within
+// a few seconds and its connection let go, whether the upstream is up or
+// can't be reached; a body that keeps moving, however slowly, must arrive
+// whole.
+func CheckStalledBodies(t testing.TB, start func(upstream string) string) {
+	t.Helper()
+	got := make(chan int, 4)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- len(b)
+		fmt.Fprintf(w, "%d", len(b))
+	}))
+	defer up.Close()
+	// Port 1 refuses connections; a port freed by the test could be taken
+	// by the proxy itself.
+	down := "http://127.0.0.1:1"
+
+	stall := func(name, proxy string, wantStatus int) {
+		t.Helper()
+		conn, err := net.Dial("tcp", strings.TrimPrefix(proxy, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(5 * time.Second))
+		io.WriteString(conn, "POST /upload HTTP/1.1\r\nHost: x\r\nContent-Type: application/octet-stream\r\nContent-Length: 100\r\n\r\n0123456789")
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("%s: no answer to a stalled body: %v", name, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode != wantStatus {
+			t.Fatalf("%s: status %d, want %d (%v)", name, resp.StatusCode, wantStatus, resp.Header)
+		}
+		if _, err := br.ReadByte(); err != io.EOF {
+			t.Fatalf("%s: the connection was kept after the stalled body: %v", name, err)
+		}
+	}
+	stall("upstream down", start(down), http.StatusBadGateway)
+	stall("upstream up", start(up.URL), http.StatusRequestTimeout)
+
+	// Slow but moving: a byte every 100ms for 2s, under a 300ms limit.
+	conn, err := net.Dial("tcp", strings.TrimPrefix(start(up.URL), "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	io.WriteString(conn, "POST /upload HTTP/1.1\r\nHost: x\r\nContent-Type: application/octet-stream\r\nContent-Length: 20\r\n\r\n")
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		conn.Write([]byte{'a'})
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("slow upload: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 || string(body) != "20" {
+		t.Fatalf("slow upload: status %d, upstream got %q bytes", resp.StatusCode, body)
 	}
 }

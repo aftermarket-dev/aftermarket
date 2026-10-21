@@ -137,7 +137,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		break
 	}
 	ctx := context.WithValue(r.Context(), ctxKey{}, st)
-	httpx.KeepRequestBody(w)
+	defer httpx.ForwardBody(w, r, p.opts.Config.UpstreamTimeout)()
 	p.rp.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -402,10 +402,10 @@ func (p *Proxy) modifyResponse(resp *http.Response) error {
 // errorHandler answers when the upstream cannot be reached in time.
 func (p *Proxy) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	st, _ := r.Context().Value(ctxKey{}).(*state)
-	if httpx.ClientGone(r) {
+	status, reason, answer := httpx.ForwardError(w, r, err)
+	if !answer {
 		return // the client went away; nobody to answer
 	}
-	status, reason := httpx.UpstreamReason(err)
 	if st != nil {
 		p.opts.Audit.Write(audit.Event{
 			Event:     audit.UpstreamError,

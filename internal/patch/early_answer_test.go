@@ -3,6 +3,7 @@ package patch
 import (
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/aftermarket-dev/aftermarket/internal/audit"
@@ -38,4 +39,13 @@ func TestEarlyAnswerIsNotCutOff(t *testing.T) {
 func TestHealthCheckWithBody(t *testing.T) {
 	h := startProxy(t, neverMatches, "http://upstream.invalid", false)
 	tk.CheckHealthWithBody(t, h.proxyURL, DefaultHealthPath)
+}
+
+// A client body that stops arriving gets an answer and its connection let
+// go, even when the upstream can't be reached; one that keeps moving,
+// however slowly, arrives whole.
+func TestStalledAndSlowBodies(t *testing.T) {
+	tk.CheckStalledBodies(t, func(up string) string {
+		return startProxy(t, "limits: {upstream_timeout: 300ms}\n"+strings.TrimPrefix(neverMatches, "\n"), up, false).proxyURL
+	})
 }
