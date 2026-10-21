@@ -18,9 +18,10 @@ import (
 // read them another way, so AfterGuard rejects them.
 //
 // The tracker has to follow bodies too, to find the next head on a
-// keep-alive connection. If it ever loses its place, the connection is
-// marked lost and every later request on it is rejected, so a confused
-// tracker fails closed.
+// keep-alive connection, and it reads them exactly as Go does. If it ever
+// loses its place, the connection is marked lost and every later request on
+// it is rejected; a request the tracker has no verdict for is rejected too,
+// so a confused tracker fails closed.
 
 type verdict struct {
 	reason string // "" when the head was clean
@@ -39,7 +40,11 @@ const (
 	lost
 )
 
-const maxChunkLine = 4096
+const (
+	maxChunkLine   = 4096
+	maxVerdicts    = 64 // heads judged but not yet handled, on one connection
+	maxChunkDigits = 16 // as in Go's chunked reader
+)
 
 type tracker struct {
 	net.Conn
@@ -50,7 +55,6 @@ type tracker struct {
 	buf       []byte // head or line being collected
 	remaining int64
 	verdicts  []verdict
-	upgrade   bool // the head being finished asked for an upgrade
 	lostWhy   string
 }
 
@@ -83,6 +87,26 @@ func (t *tracker) next() (string, bool) {
 	return "", false
 }
 
+// upgraded is called when the app agreed to an upgrade (101): from here on
+// the connection carries another protocol, and nothing more is judged.
+func (t *tracker) upgraded() {
+	t.mu.Lock()
+	if t.state != lost {
+		t.state = passThrough
+		t.buf = nil
+	}
+	t.mu.Unlock()
+}
+
+// fail marks the connection lost, for a request whose body Go could not
+// read: Go and the tracker may no longer agree where the next request
+// starts.
+func (t *tracker) fail(why string) {
+	t.mu.Lock()
+	t.lose(why)
+	t.mu.Unlock()
+}
+
 func (t *tracker) lose(why string) {
 	t.state = lost
 	t.lostWhy = why
@@ -108,9 +132,10 @@ func (t *tracker) feed(p []byte) {
 			if end < 0 {
 				t.buf = append(t.buf, p...)
 				if len(t.buf) > t.maxHead+4096 {
-					// Go answers 431 and closes; nothing more to follow.
-					t.state = passThrough
-					t.buf = nil
+					// Go answers 431, or, with part of the head already in
+					// its buffer, may still accept it: either way the
+					// tracker can't vouch for it.
+					t.lose("a request head is too long")
 				}
 				return
 			}
@@ -128,7 +153,21 @@ func (t *tracker) feed(p []byte) {
 			if t.remaining == 0 {
 				t.endMessage()
 			}
-		case inChunkSize, inTrailer, inChunkEnd:
+		case inChunkEnd:
+			// Go wants exactly CRLF after a chunk's data.
+			for len(p) > 0 && len(t.buf) < 2 {
+				t.buf = append(t.buf, p[0])
+				p = p[1:]
+			}
+			if len(t.buf) == 2 {
+				if string(t.buf) != "\r\n" {
+					t.lose("a chunk did not end with CRLF")
+					return
+				}
+				t.buf = nil
+				t.state = inChunkSize
+			}
+		case inChunkSize, inTrailer:
 			i := bytes.IndexByte(p, '\n')
 			if i < 0 {
 				t.buf = append(t.buf, p...)
@@ -137,10 +176,10 @@ func (t *tracker) feed(p []byte) {
 				}
 				return
 			}
-			line := append(t.buf, p[:i]...)
+			line := append(t.buf, p[:i+1]...)
 			t.buf = nil
 			p = p[i+1:]
-			t.line(strings.TrimSuffix(string(line), "\r"))
+			t.line(string(line))
 		case inChunkData:
 			n := int64(len(p))
 			if n > t.remaining {
@@ -150,6 +189,7 @@ func (t *tracker) feed(p []byte) {
 			p = p[n:]
 			if t.remaining == 0 {
 				t.state = inChunkEnd
+				t.buf = nil
 			}
 		}
 	}
@@ -186,7 +226,11 @@ func (t *tracker) finishHead() {
 		t.state = passThrough
 		return
 	}
-	reason, cl, chunked, upgrade, ok := inspectHead(head)
+	reason, cl, chunked, ok := inspectHead(head)
+	if len(t.verdicts) >= maxVerdicts {
+		t.lose("too many requests sent ahead of their answers")
+		return
+	}
 	t.verdicts = append(t.verdicts, verdict{reason: reason})
 	if !ok {
 		// Go will refuse this head or the connection is about to close;
@@ -194,7 +238,6 @@ func (t *tracker) finishHead() {
 		t.lose("an earlier request on it could not be framed")
 		return
 	}
-	t.upgrade = upgrade
 	switch {
 	case chunked:
 		t.state = inChunkSize
@@ -207,42 +250,48 @@ func (t *tracker) finishHead() {
 }
 
 func (t *tracker) endMessage() {
-	if t.upgrade {
-		// After a successful upgrade the connection carries another
-		// protocol. If the upgrade was refused, Go closes the connection.
-		t.state = passThrough
-		return
-	}
 	t.state = inHead
 }
 
-func (t *tracker) line(s string) {
+// line handles one chunk-size or trailer line. A size line is read the way
+// Go 1.24 reads it: it must end in CRLF with no other CR, then trailing
+// spaces and tabs are trimmed, the extension after ; is dropped, and what is
+// left must be 1 to 16 hex digits.
+func (t *tracker) line(raw string) {
 	switch t.state {
 	case inChunkSize:
-		size := s
+		if !strings.HasSuffix(raw, "\r\n") || strings.IndexByte(raw, '\r') != len(raw)-2 {
+			t.lose("a chunk size line does not end in CRLF")
+			return
+		}
+		size := strings.TrimRight(raw[:len(raw)-2], " \t")
 		if i := strings.IndexByte(size, ';'); i >= 0 {
 			size = size[:i]
 		}
-		size = strings.TrimSpace(size)
-		n, err := strconv.ParseInt(size, 16, 64)
-		if err != nil || n < 0 || size == "" {
+		if size == "" || len(size) > maxChunkDigits {
 			t.lose("a chunk size could not be read")
+			return
+		}
+		for i := 0; i < len(size); i++ {
+			c := size[i]
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+				t.lose("a chunk size could not be read")
+				return
+			}
+		}
+		n, err := strconv.ParseUint(size, 16, 64)
+		if err != nil || n > 1<<62 {
+			t.lose("a chunk size is too large")
 			return
 		}
 		if n == 0 {
 			t.state = inTrailer
 			return
 		}
-		t.remaining = n
+		t.remaining = int64(n)
 		t.state = inChunkData
-	case inChunkEnd:
-		if s != "" {
-			t.lose("a chunk did not end where its size said")
-			return
-		}
-		t.state = inChunkSize
 	case inTrailer:
-		if s == "" {
+		if strings.TrimRight(raw, "\r\n") == "" {
 			t.endMessage()
 		}
 	}
@@ -251,8 +300,9 @@ func (t *tracker) line(s string) {
 // inspectHead reads a request head as raw lines. reason is why the request
 // must be rejected ("" when it is clean); ok is false when the framing can't
 // be followed at all.
-func inspectHead(head string) (reason string, contentLength int64, chunked, upgrade, ok bool) {
+func inspectHead(head string) (reason string, contentLength int64, chunked, ok bool) {
 	lines := strings.Split(head, "\n")
+	http10 := strings.HasSuffix(strings.TrimRight(lines[0], "\r"), "HTTP/1.0")
 	var cls []string
 	tes := 0
 	ok = true
@@ -291,8 +341,6 @@ func inspectHead(head string) (reason string, contentLength int64, chunked, upgr
 			if strings.TrimSpace(toks[len(toks)-1]) == "chunked" {
 				chunked = true
 			}
-		case "upgrade":
-			upgrade = true
 		}
 	}
 	if tes > 0 && len(cls) > 0 && reason == "" {
@@ -300,6 +348,13 @@ func inspectHead(head string) (reason string, contentLength int64, chunked, upgr
 	}
 	if tes > 1 && reason == "" {
 		reason = "the request has more than one Transfer-Encoding header"
+	}
+	if tes > 0 && http10 {
+		// Go ignores Transfer-Encoding on HTTP/1.0, others don't.
+		if reason == "" {
+			reason = "an HTTP/1.0 request has Transfer-Encoding"
+		}
+		ok = false
 	}
 	if tes > 0 && !chunked {
 		ok = false // Go answers 501 and closes
@@ -316,7 +371,7 @@ func inspectHead(head string) (reason string, contentLength int64, chunked, upgr
 		}
 		contentLength = n
 	}
-	return reason, contentLength, chunked, upgrade, ok
+	return reason, contentLength, chunked, ok
 }
 
 type trackerKey struct{}
@@ -336,14 +391,16 @@ type connLimits struct {
 	max, perAddr int
 	onRefuse     func(addr string)
 
+	trusted []netip.Prefix // proxies: many clients share their address
+
 	mu     sync.Mutex
 	total  int
-	byAddr map[netip.Addr]int
+	byAddr map[string]int
 }
 
 func newListener(ln net.Listener, c *Config, onRefuse func(string)) *connLimits {
-	return &connLimits{Listener: ln, max: c.MaxConns, perAddr: c.MaxConnsPerAddr,
-		onRefuse: onRefuse, byAddr: map[netip.Addr]int{}}
+	return &connLimits{Listener: ln, max: c.MaxConns, perAddr: c.MaxConnsPerAddr, trusted: c.TrustedProxies,
+		onRefuse: onRefuse, byAddr: map[string]int{}}
 }
 
 func (l *connLimits) Accept() (net.Conn, error) {
@@ -353,11 +410,17 @@ func (l *connLimits) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		addr, _ := clientIP(c.RemoteAddr().String())
+		key := addrKey(addr) // an IPv6 /64 counts as one address
+		if inAny(addr, l.trusted) {
+			key = "" // a trusted proxy carries many clients; only the total counts
+		}
 		l.mu.Lock()
-		over := l.total >= l.max || l.byAddr[addr] >= l.perAddr
+		over := l.total >= l.max || (key != "" && l.byAddr[key] >= l.perAddr)
 		if !over {
 			l.total++
-			l.byAddr[addr]++
+			if key != "" {
+				l.byAddr[key]++
+			}
 		}
 		l.mu.Unlock()
 		if over {
@@ -367,7 +430,7 @@ func (l *connLimits) Accept() (net.Conn, error) {
 			}
 			continue
 		}
-		return &limitedConn{Conn: c, release: func() { l.release(addr) }}, nil
+		return &limitedConn{Conn: c, release: func() { l.release(key) }}, nil
 	}
 }
 
@@ -386,11 +449,13 @@ func (l trackListener) Accept() (net.Conn, error) {
 	return newTracker(c, l.maxHead), nil
 }
 
-func (l *connLimits) release(a netip.Addr) {
+func (l *connLimits) release(key string) {
 	l.mu.Lock()
 	l.total--
-	if l.byAddr[a]--; l.byAddr[a] <= 0 {
-		delete(l.byAddr, a)
+	if key != "" {
+		if l.byAddr[key]--; l.byAddr[key] <= 0 {
+			delete(l.byAddr, key)
+		}
 	}
 	l.mu.Unlock()
 }

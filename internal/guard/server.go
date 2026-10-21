@@ -20,10 +20,14 @@ func (g *Guard) Server() *http.Server {
 		ReadHeaderTimeout: c.HeaderTimeout,
 		ReadTimeout:       c.HeaderTimeout + c.BodyTimeout,
 		IdleTimeout:       c.IdleTimeout,
+		WriteTimeout:      c.HeaderTimeout + c.BodyTimeout + c.WriteTimeout,
 		MaxHeaderBytes:    c.MaxHeaderBytes,
-		ConnContext:       connContext,
-		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ErrorLog:          nil,
+		// OPTIONS * goes to the handler, which rejects it, instead of being
+		// answered by Go behind the tracker's back.
+		DisableGeneralOptionsHandler: true,
+		ConnContext:                  connContext,
+		TLSNextProto:                 map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ErrorLog:                     nil,
 	}
 }
 
@@ -67,12 +71,13 @@ func newCertFiles(cert, key string) (*certFiles, error) {
 }
 
 func (c *certFiles) load() error {
+	stamp := c.stamps() // before reading, so a change during the read is seen next time
 	pair, err := tls.LoadX509KeyPair(c.cert, c.key)
 	if err != nil {
 		return errors.New("the tls certificate and key could not be loaded: " + err.Error())
 	}
 	c.current = &pair
-	c.stamp = c.stamps()
+	c.stamp = stamp
 	return nil
 }
 
@@ -91,11 +96,11 @@ func (c *certFiles) get(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	defer c.mu.Unlock()
 	if time.Since(c.checked) > 10*time.Second {
 		c.checked = time.Now()
-		if c.stamps() != c.stamp {
+		if stamp := c.stamps(); stamp != c.stamp {
 			// A half-copied pair fails to load; the old one stays in use.
 			if pair, err := tls.LoadX509KeyPair(c.cert, c.key); err == nil {
 				c.current = &pair
-				c.stamp = c.stamps()
+				c.stamp = stamp
 			}
 		}
 	}

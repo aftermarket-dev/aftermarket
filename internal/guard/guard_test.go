@@ -526,15 +526,39 @@ func TestLimitsHold(t *testing.T) {
 	}
 
 	// A client rotating through many addresses: each IPv4 address gets its
-	// own bucket, but the table never grows past its size.
+	// own bucket, but the table never grows past its size, and a full table
+	// refuses new keys rather than reset the buckets in use.
 	g := r.guard
-	for i := 0; i < 200000; i++ {
+	r.clock.add(time.Hour) // everything refilled
+	if resp, _ := do(t, "GET", r.url+"/shared", nil, nil); resp.StatusCode != 200 {
+		t.Fatal("setup")
+	}
+	limited := 0
+	for i := 0; i < 5000; i++ {
 		req := httptest.NewRequest("GET", "/each", nil)
-		g.Decide(req, fmt.Sprintf("10.%d.%d.%d:1", i>>16&255, i>>8&255, i&255))
+		if g.Decide(req, fmt.Sprintf("10.%d.%d.%d:1", i>>16&255, i>>8&255, i&255)).Event == Limited {
+			limited++
+		}
 	}
-	if n := g.limits.len(); n > 1000 {
-		t.Fatalf("%d buckets, table size 1000", n)
+	if n := g.limits.len(); n > 1000 || limited != 4000 {
+		t.Fatalf("%d buckets for a table of 1000, %d new addresses refused, want 4000", n, limited)
 	}
+	// The one-per-rule bucket still has the 9 tokens left from before.
+	shared := 0
+	for i := 0; i < 20; i++ {
+		if g.Decide(httptest.NewRequest("GET", "/shared", nil), "10.200.0.1:1").Event == Allowed {
+			shared++
+		}
+	}
+	if shared != 9 {
+		t.Fatalf("the per-rule bucket gave %d after the flood, want 9", shared)
+	}
+	g.opts.Log.Flush()
+	if !strings.Contains(r.logText(), `"event":"limit_table_full_summary"`) {
+		t.Fatal("refused keys weren't logged")
+	}
+	// Once buckets refill, they make room.
+	r.clock.add(time.Hour)
 	// Addresses in one IPv6 /64 share a bucket, so rotating inside it gains
 	// nothing.
 	allowed := 0
@@ -546,6 +570,12 @@ func TestLimitsHold(t *testing.T) {
 	}
 	if allowed != 2 {
 		t.Fatalf("%d allowed from one /64, want 2", allowed)
+	}
+	if !strings.Contains(r.logText(), "limit_evicted") {
+		g.opts.Log.Flush()
+		if !strings.Contains(r.logText(), "limit_evicted") {
+			t.Fatal("evictions weren't logged")
+		}
 	}
 }
 

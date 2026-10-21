@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"sort"
 	"sync"
 	"time"
 )
@@ -15,6 +16,9 @@ const (
 	Rejected = "rejected" // the request could be read two ways, or broke a size or time limit
 	Limited  = "limited"  // over a rate limit
 	Refused  = "refused"  // a connection over a connection limit
+
+	LimitEvicted   = "limit_evicted"    // counted only
+	LimitTableFull = "limit_table_full" // counted only
 )
 
 // Entry is one line of the decision log. It never holds a credential, a
@@ -90,6 +94,20 @@ func (l *Log) Write(e Entry) {
 	l.writeLocked(e)
 }
 
+// Count notes an event that is only ever logged as a count, once a second,
+// such as a rate-limit bucket dropped to make room.
+func (l *Log) Count(event string) {
+	if l == nil || l.w == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.suppressed) == 0 {
+		l.since = l.now()
+	}
+	l.suppressed[event]++
+}
+
 // Flush writes the summary of anything counted but not logged yet.
 func (l *Log) Flush() {
 	if l == nil || l.w == nil {
@@ -101,11 +119,21 @@ func (l *Log) Flush() {
 }
 
 func (l *Log) flushLocked(now time.Time) {
-	for _, ev := range []string{Denied, Rejected, Limited, Refused} {
-		if n := l.suppressed[ev]; n > 0 {
-			l.writeLocked(Entry{Time: now.UTC().Format(time.RFC3339Nano), Event: ev + "_summary", Count: n,
-				Since: l.since.UTC().Format(time.RFC3339Nano), Reason: "more requests than the log takes one by one"})
+	events := make([]string, 0, len(l.suppressed))
+	for ev := range l.suppressed {
+		events = append(events, ev)
+	}
+	sort.Strings(events)
+	for _, ev := range events {
+		reason := "more than the log takes one by one"
+		switch ev {
+		case LimitEvicted:
+			reason = "rate-limit buckets that had refilled were dropped to make room"
+		case LimitTableFull:
+			reason = "the rate-limit table was full of buckets in use, so new keys were refused"
 		}
+		l.writeLocked(Entry{Time: now.UTC().Format(time.RFC3339Nano), Event: ev + "_summary", Count: l.suppressed[ev],
+			Since: l.since.UTC().Format(time.RFC3339Nano), Reason: reason})
 	}
 	clear(l.suppressed)
 }

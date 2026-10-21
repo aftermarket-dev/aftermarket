@@ -114,7 +114,7 @@ func TestUpgrades(t *testing.T) {
 	}))
 	defer ws.Close()
 	up, _ := url.Parse(ws.URL)
-	r := start(t, "rules:\n  - id: ws\n    when: {path: /ws}\n    allow: true\n", func(o *Options) { o.Upstream = up })
+	r := start(t, "rules:\n  - id: ws\n    when: {path: /ws}\n    allow: true\n    upgrade: [echo]\n  - id: plain\n    when: {path: /plain}\n    allow: true\n", func(o *Options) { o.Upstream = up })
 	c, _ := net.Dial("tcp", r.addr)
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(3 * time.Second))
@@ -133,6 +133,10 @@ func TestUpgrades(t *testing.T) {
 	}
 	if resp := r.raw(t, "GET /other HTTP/1.1\r\nHost: a\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n"); len(resps(resp)) != 1 || resp[0].StatusCode != 403 {
 		t.Fatalf("denied upgrade: %v", resp)
+	}
+	// A rule that allows a path doesn't allow upgrades on it unless it says so.
+	if resp := r.raw(t, "GET /plain HTTP/1.1\r\nHost: a\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n"); len(resp) != 1 || resp[0].StatusCode != 403 {
+		t.Fatalf("upgrade on a plain rule: %v", resp)
 	}
 }
 

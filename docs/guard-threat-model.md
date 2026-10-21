@@ -42,13 +42,15 @@ This is the main risk for any gateway. AfterGuard decides on one reading of the 
 - A request with conflicting framing, an encoded slash, dot or backslash in the path, a NUL, a non-canonical path (`..`, `//`, a trailing dot segment) or a header with bytes HTTP doesn't allow is rejected with 400. It is never cleaned up and passed on.
 - AfterGuard forwards the request it judged, rebuilt from its own parse, so the app never sees bytes the rules didn't.
 - Path rules match the decoded, canonical path, case-sensitive by default with an option for apps that ignore case.
+- Headers that let a request rewrite its own path, method or address in some frameworks (`X-Original-Url`, `X-Http-Method-Override` and similar) never reach the app, and neither do header names spelled with underscores.
+- An upgrade is passed on only for a protocol the matching rule lists, and never to `h2c`, which would carry requests past every rule. Methods must be upper case.
 
 ### 2. A request reaches the app without the check it needed
 
 **Answer: rules in order, and a default that fails closed.**
 - Rules apply in the order written, and the first one that decides wins, as in AfterPatch.
 - The default for a request no rule allows is `deny`. A config that sets the default to `allow` is accepted, but `guard check` warns about it.
-- If anything inside AfterGuard fails while judging a request, the answer is 500 and the request is not forwarded.
+- If anything inside AfterGuard fails while judging a request, the answer is 500 and the request is not forwarded. A request the framing check has no verdict for is rejected.
 
 ### 3. Someone pretends to be someone else
 
@@ -63,7 +65,7 @@ This is the main risk for any gateway. AfterGuard decides on one reading of the 
 **Answer: limits that hold under load and can't be used to fill memory.**
 - Rate limits per client address, per key, or per rule, as a token bucket (`60/m`, burst 10). Over the limit gives 429 with `Retry-After`.
 - Failed logins have their own, stricter limit per address.
-- The table of limits has a fixed size. IPv6 addresses are counted per /64, so an attacker with many addresses doesn't get many buckets. When the table is full, the oldest entries go first, and that is logged.
+- The table of limits has a fixed size. IPv6 addresses are counted per /64, so an attacker with many addresses doesn't get many buckets. When the table is full, only a bucket that has refilled completely is dropped to make room, and if there is none, the new key is refused with 429. Per-rule buckets are never dropped. Both are logged. So a flood of new addresses can't reset anyone's limit or failed-login count.
 - Timeouts for reading headers and bodies (against slow-sending clients), caps on header size, body size, and connections in total and per address.
 
 ### 5. Requests the app was never meant to get

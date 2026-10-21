@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.5.1
-- Recorded: 2026-10-21T13:28:15Z
+- Version: 0.6.0
+- Recorded: 2026-10-21T15:18:56Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-333 of 333 tests passed (race detector on).
+404 of 404 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -18,6 +18,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | cmd/aftermarket | TestCheckExample | pass |
 | cmd/aftermarket | TestCheckReportsErrorsAndOverlaps | pass |
 | cmd/aftermarket | TestConfigCommands | pass |
+| cmd/aftermarket | TestGuardCommands | pass |
 | cmd/aftermarket | TestHookCommands | pass |
 | cmd/aftermarket | TestRecordCheck | pass |
 | cmd/aftermarket | TestRecordNeverOverwrites | pass |
@@ -34,6 +35,8 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | examples/customer-api | TestOldClientPassesThroughAdapt | pass |
 | examples/customer-api | TestRecordedSuiteReplaysTheSameThroughAdapt | pass |
 | examples/customer-api | TestV2BreaksTheOldClient | pass |
+| examples/legacy-admin | TestFixturePasses | pass |
+| examples/legacy-admin | TestTheAdminPanelBeforeAndAfter | pass |
 | examples/legacy-app | TestFixturePasses | pass |
 | examples/legacy-app | TestTheExampleEndToEnd | pass |
 | examples/legacy-customer | TestFixtureFilePasses | pass |
@@ -106,6 +109,47 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/config | TestYAMLWriterReadsBack | pass |
 | internal/fixture | TestFixtureErrors | pass |
 | internal/fixture | TestFixtureReportsFailures | pass |
+| internal/guard | TestAFailureWhileJudgingForwardsNothing | pass |
+| internal/guard | TestARequestWithoutAVerdictIsRejected | pass |
+| internal/guard | TestAddrKey | pass |
+| internal/guard | TestAllowedTrafficPassesByteForByte | pass |
+| internal/guard | TestAnOversizedPipelinedHeadIsRejected | pass |
+| internal/guard | TestAnUpgradeHeaderAloneKeepsTheChecksOn | pass |
+| internal/guard | TestCheckWarnings | pass |
+| internal/guard | TestChunkSizesCantHideARequest | pass |
+| internal/guard | TestClientsCantChooseTheirIdentityOrAddress | pass |
+| internal/guard | TestConcurrentGuessesStayWithinTheLimit | pass |
+| internal/guard | TestConnectionLimitsPerSlash64AndProxies | pass |
+| internal/guard | TestCredentials | pass |
+| internal/guard | TestDangerousConfigs | pass |
+| internal/guard | TestDeniedRequestsNeverReachTheApp | pass |
+| internal/guard | TestDryRunForwardsAndLogs | pass |
+| internal/guard | TestEvictionResetsNoLimit | pass |
+| internal/guard | TestFixtureRuns | pass |
+| internal/guard | TestH2CNeverTunnelsPastTheRules | pass |
+| internal/guard | TestHTTP10WithTransferEncoding | pass |
+| internal/guard | TestHealthUpstreamErrorsAndConnections | pass |
+| internal/guard | TestIgnoreCaseRejectsNonASCIIPaths | pass |
+| internal/guard | TestKeepCredentials | pass |
+| internal/guard | TestLimitsHold | pass |
+| internal/guard | TestLoadReportsEveryProblemInLineOrder | pass |
+| internal/guard | TestLogSummarisesEveryEvent | pass |
+| internal/guard | TestLogSummarisesFloods | pass |
+| internal/guard | TestLowerCaseMethodsAreRejected | pass |
+| internal/guard | TestNoSecretReachesTheLog | pass |
+| internal/guard | TestNothingAmbiguousGetsThrough | pass |
+| internal/guard | TestOlderAndOddRequestForms | pass |
+| internal/guard | TestOptionsStarKeepsVerdictsInStep | pass |
+| internal/guard | TestOverrideHeadersNeverReachTheApp | pass |
+| internal/guard | TestPathOptionsAndCredentialsInTheQuery | pass |
+| internal/guard | TestResponseHeadersAndBodies | pass |
+| internal/guard | TestServerHasAWriteTimeout | pass |
+| internal/guard | TestSmugglingAfterACleanRequestOnOneConnection | pass |
+| internal/guard | TestTLS | pass |
+| internal/guard | TestTrackerFollowsSplitReads | pass |
+| internal/guard | TestTwoAuthorizationHeaders | pass |
+| internal/guard | TestUnderscoreHeadersAreDropped | pass |
+| internal/guard | TestUpgrades | pass |
 | internal/hook | TestABusyFileDoesNotBlockTheFolder | pass |
 | internal/hook | TestAChangeSeenAgainAfterACrashKeepsItsID | pass |
 | internal/hook | TestAFileThatBlinksGivesNoEvent | pass |
@@ -232,17 +276,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 65.7 µs | 311.0 µs | 22003 |
-| proxy, no rule matches | 176.3 µs | 1281.6 µs | 5197 |
-| proxy, both example rules applied | 242.4 µs | 2254.8 µs | 5066 |
-| adapt: direct to v2, one customer | 53.5 µs | 441.4 µs | 21019 |
-| adapt: v1 lookup rebuilt from v2 | 200.2 µs | 2062.1 µs | 5941 |
-| adapt: direct to v2, list | 65.5 µs | 397.8 µs | 21407 |
-| adapt: v1 list rebuilt from v2 | 300.5 µs | 2561.1 µs | 4061 |
-| record: v2 lookup saved to a fixture | 244.2 µs | 1916.1 µs | 5942 |
+| direct to upstream | 52.9 µs | 304.9 µs | 22167 |
+| proxy, no rule matches | 152.3 µs | 1187.2 µs | 6566 |
+| proxy, both example rules applied | 228.9 µs | 2133.4 µs | 4474 |
+| adapt: direct to v2, one customer | 59.7 µs | 418.7 µs | 22783 |
+| adapt: v1 lookup rebuilt from v2 | 209.8 µs | 2341.4 µs | 4886 |
+| adapt: direct to v2, list | 58.0 µs | 392.8 µs | 20972 |
+| adapt: v1 list rebuilt from v2 | 267.3 µs | 2614.9 µs | 3971 |
+| record: v2 lookup saved to a fixture | 231.9 µs | 1877.5 µs | 4742 |
 
-Added by the proxy when no rule matches: 110.6 µs at p50, 970.6 µs at p99.
-Added by the proxy with both example rules applied: 176.7 µs at p50, 1943.8 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 146.7 µs at p50, 1620.7 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 235.0 µs at p50, 2163.3 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 190.7 µs at p50, 1474.7 µs at p99.
+Added by the proxy when no rule matches: 99.4 µs at p50, 882.3 µs at p99.
+Added by the proxy with both example rules applied: 176.0 µs at p50, 1828.5 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 150.1 µs at p50, 1922.7 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 209.3 µs at p50, 2222.1 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 172.2 µs at p50, 1458.8 µs at p99.

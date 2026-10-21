@@ -37,6 +37,7 @@ const (
 	DefaultDenyStatus        = 403
 	DefaultFailedLoginRate   = 5
 	DefaultFailedLoginPeriod = time.Minute
+	DefaultWriteTimeout      = 5 * time.Minute
 )
 
 // Config is a loaded guard config.
@@ -72,6 +73,9 @@ type Config struct {
 
 	SetHeaders    [][2]string
 	RemoveHeaders []string
+	StripHeaders  []string // request headers never forwarded, besides the built-in ones
+
+	WriteTimeout time.Duration
 
 	Warnings []string // things check reports without failing
 }
@@ -116,7 +120,17 @@ type Rule struct {
 	DenyStatus int
 	Limit      *Limit
 	MaxBody    int64 // 0: no check beyond the global limit
-	JSON       bool  // the body must be valid JSON
+	JSON       bool  // the body, when there is one, must be valid JSON
+	Upgrades   []string
+}
+
+func (r *Rule) allowsUpgrade(proto string) bool {
+	for _, u := range r.Upgrades {
+		if u == proto {
+			return true
+		}
+	}
+	return false
 }
 
 // NeedsClient reports whether the rule only lets known clients through.
@@ -151,7 +165,7 @@ func Load(data []byte, dir string) (*Config, error) {
 	c := &Config{
 		MaxBody: rules.DefaultMaxBody, UpstreamTimeout: rules.DefaultUpstreamTimeout,
 		MaxHeaderBytes: DefaultMaxHeaderBytes, HeaderTimeout: DefaultHeaderTimeout, BodyTimeout: DefaultBodyTimeout,
-		IdleTimeout: DefaultIdleTimeout, MaxConns: DefaultMaxConns, MaxConnsPerAddr: DefaultMaxConnsPerAddr,
+		IdleTimeout: DefaultIdleTimeout, WriteTimeout: DefaultWriteTimeout, MaxConns: DefaultMaxConns, MaxConnsPerAddr: DefaultMaxConnsPerAddr,
 		APIKeyHeader: DefaultAPIKeyHeader, IdentityHeader: DefaultIdentityHeader, LimitTable: DefaultLimitTable,
 		FailedLogins: Rate{Count: DefaultFailedLoginRate, Period: DefaultFailedLoginPeriod, Burst: DefaultFailedLoginRate},
 	}
@@ -200,8 +214,21 @@ func Load(data []byte, dir string) (*Config, error) {
 			rulesNode, rulesLine = p.Value, p.KeyLine
 		case "response":
 			l.response(p.Value, p.KeyLine, c)
+		case "strip_headers":
+			items, ok := scalars(p.Value)
+			if !ok {
+				l.errf(p.KeyLine, "strip_headers must list header names")
+			}
+			for _, h := range items {
+				name := textproto.CanonicalMIMEHeaderKey(h)
+				if !rules.ValidHeaderName(name) {
+					l.errf(p.KeyLine, "%q is not a header name", h)
+					continue
+				}
+				c.StripHeaders = append(c.StripHeaders, name)
+			}
 		default:
-			l.errf(p.KeyLine, "unknown key %q (use version, default, limits, server, tls, paths, trusted_proxies, credentials, clients, limit_table, rules or response)", p.Key)
+			l.errf(p.KeyLine, "unknown key %q (use version, default, limits, server, tls, paths, trusted_proxies, credentials, clients, limit_table, strip_headers, rules or response)", p.Key)
 		}
 	}
 	clientIDs := map[string]int{}
@@ -267,17 +294,60 @@ func (c *Config) warn() {
 	if c.DefaultAllow {
 		c.Warnings = append(c.Warnings, "default: allow lets through every request no rule denies; deny is safer")
 	}
+	for _, p := range c.TrustedProxies {
+		if (p.Addr().Is4() && p.Bits() < 8) || (p.Addr().Is6() && p.Bits() < 16) {
+			c.Warnings = append(c.Warnings, fmt.Sprintf("trusted_proxies %s is so wide that almost any client can choose its own address through X-Forwarded-For", p))
+		}
+	}
+	if len(c.TrustedProxies) > 0 {
+		c.Warnings = append(c.Warnings, "connections from trusted_proxies count toward max_connections only, not max_connections_per_address")
+	}
+	hidden := map[*Rule]bool{}
 	for i, r := range c.Rules {
-		if r.When.Empty() && len(r.From) == 0 && !r.NeedsClient() && r.MaxBody == 0 && !r.JSON {
-			for _, later := range c.Rules[i+1:] {
-				c.Warnings = append(c.Warnings, fmt.Sprintf("rule %s (line %d) can never match: rule %s (line %d) before it matches every request", later.ID, later.Line, r.ID, r.Line))
+		for _, later := range c.Rules[i+1:] {
+			if !hidden[later] && covers(r, later) {
+				hidden[later] = true
+				c.Warnings = append(c.Warnings, fmt.Sprintf("rule %s (line %d) can never match: rule %s (line %d) before it matches every request it would", later.ID, later.Line, r.ID, r.Line))
 			}
-			break
 		}
 	}
 	if c.TLSCert == "" {
 		c.Warnings = append(c.Warnings, "no tls: AfterGuard serves plain HTTP; put it behind TLS or add tls: with a certificate before it faces the internet")
 	}
+}
+
+// covers reports whether rule a always matches before b could: every request
+// b's conditions accept, a's accept too. It looks at the common cases only:
+// a has no query, header or address conditions, its methods include b's,
+// and its path is empty, the same as b's, or a /** prefix of it.
+func covers(a, b *Rule) bool {
+	if len(a.When.Query) > 0 || len(a.When.Headers) > 0 || len(a.From) > 0 {
+		return false
+	}
+	if len(a.When.Methods) > 0 {
+		if len(b.When.Methods) == 0 {
+			return false
+		}
+		for _, m := range b.When.Methods {
+			found := false
+			for _, am := range a.When.Methods {
+				found = found || am == m
+			}
+			if !found {
+				return false
+			}
+		}
+	}
+	ap, bp := a.When.PathGlob, b.When.PathGlob
+	switch {
+	case ap == "" || ap == "/**":
+		return true
+	case ap == bp:
+		return true
+	case strings.HasSuffix(ap, "/**") && bp != "":
+		return strings.HasPrefix(bp, strings.TrimSuffix(ap, "**"))
+	}
+	return false
 }
 
 func lineOf(e error) int {
@@ -364,7 +434,7 @@ func (l *loader) server(n *yamlite.Node, line int, c *Config) {
 	if !l.mapping(n, line, "server") {
 		return
 	}
-	l.only(n, "server", "max_header_bytes", "header_timeout", "body_timeout", "idle_timeout", "max_connections", "max_connections_per_address")
+	l.only(n, "server", "max_header_bytes", "header_timeout", "body_timeout", "idle_timeout", "write_timeout", "max_connections", "max_connections_per_address")
 	for _, p := range n.Pairs {
 		switch p.Key {
 		case "max_header_bytes":
@@ -382,6 +452,8 @@ func (l *loader) server(n *yamlite.Node, line int, c *Config) {
 			c.BodyTimeout = l.duration(p, c.BodyTimeout)
 		case "idle_timeout":
 			c.IdleTimeout = l.duration(p, c.IdleTimeout)
+		case "write_timeout":
+			c.WriteTimeout = l.duration(p, c.WriteTimeout)
 		case "max_connections":
 			if v := l.count(p, 1, 1_000_000); v > 0 {
 				c.MaxConns = v
@@ -456,6 +528,14 @@ func ParsePrefix(s string) (netip.Prefix, error) {
 		p, err := netip.ParsePrefix(s)
 		if err != nil {
 			return netip.Prefix{}, err
+		}
+		if p.Addr().Is4In6() {
+			// Clients are compared as plain IPv4, so an IPv4-mapped range
+			// is written as the IPv4 range it means.
+			if p.Bits() < 96 {
+				return netip.Prefix{}, fmt.Errorf("%s covers IPv4 and IPv6 addresses at once; list the ranges separately", s)
+			}
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
 		}
 		return p.Masked(), nil
 	}
@@ -631,7 +711,7 @@ func (l *loader) rule(n *yamlite.Node, c *Config) *Rule {
 		l.errf(n.Line, "each rule must be a mapping with id:, when: and allow: or deny:")
 		return nil
 	}
-	l.only(n, "a rule", "id", "description", "when", "from", "client", "allow", "deny", "limit", "max_body", "json")
+	l.only(n, "a rule", "id", "description", "when", "from", "client", "allow", "deny", "limit", "max_body", "json", "upgrade")
 	r := &Rule{Line: n.Line}
 	if v := n.Get("id"); v == nil || v.Kind != yamlite.Scalar || !idRe.MatchString(v.Value) {
 		l.errf(n.Line, "rule id is required: letters, digits, . _ -")
@@ -713,6 +793,19 @@ func (l *loader) rule(n *yamlite.Node, c *Config) *Rule {
 			}
 		case "json":
 			r.JSON = l.boolean(p)
+		case "upgrade":
+			items, ok := scalars(p.Value)
+			if !ok || len(items) == 0 {
+				l.errf(p.KeyLine, "upgrade must list protocols such as websocket")
+			}
+			for _, u := range items {
+				u = strings.ToLower(u)
+				if u == "h2c" {
+					l.errf(p.KeyLine, "upgrade: h2c is never allowed; it would carry requests past every rule")
+					continue
+				}
+				r.Upgrades = append(r.Upgrades, u)
+			}
 		}
 	}
 	switch {
@@ -721,8 +814,8 @@ func (l *loader) rule(n *yamlite.Node, c *Config) *Rule {
 	case hasAllow:
 		r.Allow = true
 	}
-	if hasDeny && (r.Limit != nil || r.MaxBody > 0 || r.JSON || r.NeedsClient()) {
-		l.errf(n.Line, "rule %s denies, so limit, max_body, json and client have nothing to do; they go on allow rules", r.ID)
+	if hasDeny && (r.Limit != nil || r.MaxBody > 0 || r.JSON || r.NeedsClient() || len(r.Upgrades) > 0) {
+		l.errf(n.Line, "rule %s denies, so limit, max_body, json, client and upgrade have nothing to do; they go on allow rules", r.ID)
 	}
 	if r.Limit != nil && r.Limit.Per == "client" && !r.NeedsClient() {
 		l.errf(n.Line, "rule %s limits per client, so it needs client:", r.ID)

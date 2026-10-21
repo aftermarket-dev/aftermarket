@@ -67,6 +67,8 @@ func New(opts Options) (*Guard, error) {
 	for _, c := range g.cfg.Clients {
 		g.basic = g.basic || c.usesBasic
 	}
+	g.limits.onEvict = func() { g.opts.Log.Count(LimitEvicted) }
+	g.limits.onFull = func() { g.opts.Log.Count(LimitTableFull) }
 	tr := opts.Transport
 	if tr == nil {
 		tr = httpx.NewTransport(g.cfg.UpstreamTimeout)
@@ -91,6 +93,7 @@ type Decision struct {
 	RetryAfter time.Duration
 	path       string // the canonical path, when the request has one
 	ask        bool   // answer 401 with a Basic challenge
+	upgrade    bool   // the request asked for an upgrade
 }
 
 type reqState struct {
@@ -108,10 +111,22 @@ type stateKey struct{}
 // ServeHTTP judges and then forwards or answers one request.
 func (g *Guard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Every request takes its verdict from the connection, in order, even
-	// the health check, so the verdicts stay matched to their requests.
+	// the health check, so the verdicts stay matched to their requests. A
+	// request the tracker has no verdict for is rejected.
 	framingReason := ""
 	if t, ok := r.Context().Value(trackerKey{}).(*tracker); ok {
-		framingReason, _ = t.next()
+		var has bool
+		if framingReason, has = t.next(); !has {
+			framingReason = "the request has no framing verdict on its connection"
+			t.fail("a request had no verdict")
+		}
+	}
+	// Headers spelled with underscores are dropped, as nginx does: some
+	// frameworks read X_Role as X-Role, and rules match the hyphen spelling.
+	for name := range r.Header {
+		if strings.Contains(name, "_") {
+			delete(r.Header, name)
+		}
 	}
 	if g.opts.HealthPath != "" && r.URL.Path == g.opts.HealthPath && framingReason == "" && r.Method == http.MethodGet {
 		httpx.WriteHealth(w)
@@ -119,7 +134,7 @@ func (g *Guard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	st := &reqState{id: g.reqID.Add(1), tls: r.TLS != nil || g.cfg.TLSCert != ""}
 	st.addr = g.clientAddress(r)
-	st.d = g.decide(r, st.addr, framingReason)
+	st.d = g.safeDecide(r, st.addr, framingReason)
 	st.path = st.d.path
 	if st.d.Event == Allowed || g.opts.DryRun {
 		g.logDecision(r, st, g.opts.DryRun && st.d.Event != Allowed)
@@ -141,6 +156,17 @@ func (g *Guard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.answer(w, st.d)
 }
 
+// safeDecide judges a request, and turns a failure inside AfterGuard into a
+// 500 that forwards nothing.
+func (g *Guard) safeDecide(r *http.Request, addr netip.Addr, framingReason string) (d Decision) {
+	defer func() {
+		if p := recover(); p != nil {
+			d = Decision{Event: Rejected, Status: http.StatusInternalServerError, Reason: "AfterGuard failed while judging the request"}
+		}
+	}()
+	return g.decide(r, addr, framingReason)
+}
+
 // answer writes AfterGuard's own reply to a request it turned away. It says
 // nothing about which rule did it.
 func (g *Guard) answer(w http.ResponseWriter, d Decision) {
@@ -157,7 +183,7 @@ func (g *Guard) answer(w http.ResponseWriter, d Decision) {
 	if d.ask && d.Status == http.StatusUnauthorized && g.basic {
 		h.Set("WWW-Authenticate", `Basic realm="aftermarket", charset="UTF-8"`)
 	}
-	if d.Event == Rejected {
+	if d.Event == Rejected || d.upgrade {
 		h.Set("Connection", "close")
 	}
 	w.WriteHeader(d.Status)
@@ -251,6 +277,10 @@ func (g *Guard) canonicalPath(r *http.Request) (string, string) {
 	switch {
 	case !utf8.ValidString(p):
 		return "", "the path is not valid UTF-8"
+	case g.cfg.IgnoreCase && !isASCII(p):
+		// Apps that ignore case fold some letters outside ASCII onto ASCII
+		// ones (ſ to s), in ways AfterGuard can't know.
+		return "", "the path has characters outside ASCII, and paths: ignore_case is on"
 	case strings.ContainsAny(p, "\\"):
 		return "", "the path has a backslash"
 	case strings.Contains(p, "//"):
@@ -271,10 +301,27 @@ func (g *Guard) canonicalPath(r *http.Request) (string, string) {
 	return p, ""
 }
 
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
 // decide judges one request.
 func (g *Guard) decide(r *http.Request, addr netip.Addr, framingReason string) Decision {
 	if framingReason != "" {
 		return reject(framingReason)
+	}
+	if r.Method != strings.ToUpper(r.Method) {
+		return reject("the method is not in upper case")
+	}
+	if up := upgradeOf(r); up != "" {
+		if up == "h2c" || r.Header.Get("Http2-Settings") != "" {
+			return reject("AfterGuard doesn't pass on HTTP/2 upgrades")
+		}
 	}
 	p, why := g.canonicalPath(r)
 	if why != "" {
@@ -282,7 +329,14 @@ func (g *Guard) decide(r *http.Request, addr netip.Addr, framingReason string) D
 	}
 	d := g.decideRules(r, addr, p)
 	d.path = p
+	d.upgrade = upgradeOf(r) != ""
 	return d
+}
+
+// upgradeOf is the protocol a request asks to switch to, in lower case, or
+// "" when it asks for none.
+func upgradeOf(r *http.Request) string {
+	return strings.ToLower(strings.TrimSpace(r.Header.Get("Upgrade")))
 }
 
 func (g *Guard) decideRules(r *http.Request, addr netip.Addr, p string) Decision {
@@ -315,6 +369,9 @@ func (g *Guard) decideRules(r *http.Request, addr netip.Addr, p string) Decision
 			return Decision{Event: Denied, Status: rule.DenyStatus, Rule: rule.ID, Reason: "denied by rule"}
 		}
 		d := Decision{Event: Allowed, Rule: rule.ID}
+		if up := upgradeOf(r); up != "" && !rule.allowsUpgrade(up) {
+			return Decision{Event: Denied, Status: http.StatusForbidden, Rule: rule.ID, Reason: "the rule doesn't allow an upgrade to " + up}
+		}
 		if rule.NeedsClient() {
 			id, res, wait := g.authenticate(r, addr, now)
 			switch res {
@@ -338,7 +395,7 @@ func (g *Guard) decideRules(r *http.Request, addr netip.Addr, p string) Decision
 			case "client":
 				key += "|client|" + d.Client
 			}
-			if ok, wait := g.limits.take(key, rule.Limit.Rate, now); !ok {
+			if ok, wait := g.limits.take(key, rule.Limit.Rate, now, rule.Limit.Per == "rule"); !ok {
 				return Decision{Event: Limited, Status: http.StatusTooManyRequests, Rule: rule.ID, Client: d.Client, RetryAfter: wait, Reason: "over the rule's rate limit"}
 			}
 		}
@@ -351,6 +408,9 @@ func (g *Guard) decideRules(r *http.Request, addr netip.Addr, p string) Decision
 		return d
 	}
 	if g.cfg.DefaultAllow {
+		if up := upgradeOf(r); up != "" {
+			return Decision{Event: Denied, Status: http.StatusForbidden, Reason: "upgrades need a rule that allows them"}
+		}
 		return Decision{Event: Allowed, Reason: "no rule matched; the default allows it"}
 	}
 	return Decision{Event: Denied, Status: http.StatusForbidden, Reason: "no rule allows it"}
@@ -426,7 +486,11 @@ const (
 // as long whichever one matches. Failed attempts are limited per address.
 func (g *Guard) authenticate(r *http.Request, addr netip.Addr, now time.Time) (string, authResult, time.Duration) {
 	failKey := "failed-logins|" + addrKey(addr)
-	if ok, wait := g.limits.peek(failKey, g.cfg.FailedLogins, now); !ok {
+	// Every attempt spends a failed-login token before anything is
+	// compared, and gets it back if the credential is right. So concurrent
+	// guesses can't all pass the check before any is counted, and a guess
+	// is never compared without a place to count it.
+	if ok, wait := g.limits.take(failKey, g.cfg.FailedLogins, now, false); !ok {
 		return "", authLocked, wait
 	}
 	key, hasKey := "", false
@@ -447,6 +511,9 @@ func (g *Guard) authenticate(r *http.Request, addr netip.Addr, now time.Time) (s
 		}
 	}
 	user, pass, hasBasic := "", "", false
+	if g.basic && len(r.Header.Values("Authorization")) > 1 {
+		return g.failed(failKey, now)
+	}
 	if !hasKey && g.basic {
 		user, pass, hasBasic = r.BasicAuth()
 		if !hasBasic && r.Header.Get("Authorization") != "" {
@@ -454,6 +521,7 @@ func (g *Guard) authenticate(r *http.Request, addr netip.Addr, now time.Time) (s
 		}
 	}
 	if !hasKey && !hasBasic {
+		g.limits.refund(failKey) // nothing was tried
 		return "", authMissing, 0
 	}
 	found := ""
@@ -482,17 +550,25 @@ func (g *Guard) authenticate(r *http.Request, addr netip.Addr, now time.Time) (s
 	if found == "" {
 		return g.failed(failKey, now)
 	}
+	g.limits.refund(failKey)
 	return found, authOK, 0
 }
 
+// failed counts a failed attempt; its token was spent before comparing.
 func (g *Guard) failed(failKey string, now time.Time) (string, authResult, time.Duration) {
-	g.limits.take(failKey, g.cfg.FailedLogins, now)
 	return "", authBad, 0
 }
 
 // forwardingHeaders are set by AfterGuard alone; client copies never reach
 // the app, under any spelling.
 var forwardingHeaders = []string{"x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "forwarded", "x-real-ip"}
+
+// overrideHeaders let a client rewrite the path, the method or its address
+// in some frameworks and servers, behind AfterGuard's back. They never reach
+// the app; strip_headers adds more.
+var overrideHeaders = []string{"x-original-url", "x-rewrite-url", "x-override-url", "x-http-method-override", "x-http-method",
+	"x-method-override", "true-client-ip", "x-client-ip", "cf-connecting-ip", "x-cluster-client-ip", "x-forwarded-port",
+	"x-forwarded-prefix", "x-forwarded-server", "x-forwarded-scheme", "x-forwarded-ssl", "x-url-scheme", "http2-settings"}
 
 // normName folds a header name the way some servers and frameworks do, so
 // X_Aftermarket_Client and x-aftermarket-client count as the same header.
@@ -523,6 +599,12 @@ func (g *Guard) rewrite(pr *httputil.ProxyRequest) {
 	managed := map[string]bool{}
 	for _, h := range forwardingHeaders {
 		managed[h] = true
+	}
+	for _, h := range overrideHeaders {
+		managed[h] = true
+	}
+	for _, h := range g.cfg.StripHeaders {
+		managed[normName(h)] = true
 	}
 	if g.cfg.IdentityHeader != "" {
 		managed[normName(g.cfg.IdentityHeader)] = true
@@ -581,6 +663,11 @@ func dropQueryKeys(raw string, keys []string) string {
 }
 
 func (g *Guard) modifyResponse(resp *http.Response) error {
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		if t, ok := resp.Request.Context().Value(trackerKey{}).(*tracker); ok {
+			t.upgraded()
+		}
+	}
 	for _, name := range g.cfg.RemoveHeaders {
 		resp.Header.Del(name)
 	}
@@ -592,6 +679,12 @@ func (g *Guard) modifyResponse(resp *http.Response) error {
 
 func (g *Guard) errorHandler(w http.ResponseWriter, r *http.Request, err error) {
 	st, _ := r.Context().Value(stateKey{}).(*reqState)
+	// After a failed exchange, Go and the tracker may not agree where the
+	// next request on this connection starts, so it ends here.
+	if t, ok := r.Context().Value(trackerKey{}).(*tracker); ok {
+		t.fail("an exchange on it failed")
+	}
+	w.Header().Set("Connection", "close")
 	var mbe *http.MaxBytesError
 	d := Decision{Event: "upstream_error"}
 	switch {
