@@ -8,6 +8,8 @@ package sqlitecli
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/proc"
@@ -39,6 +42,9 @@ type Runner struct {
 	Bin     string        // the sqlite3 program
 	Timeout time.Duration // per run
 	MaxOut  int64
+
+	once     sync.Once
+	availErr error
 }
 
 // New returns a runner for the sqlite3 program on the PATH, or the one
@@ -55,8 +61,14 @@ func New() *Runner {
 var ErrNoSQLite3 = errors.New("the sqlite3 program was not found; install it, or set AFTERMARKET_SQLITE3 to its path")
 
 // Available reports whether sqlite3 can be run and is new enough: safe
-// mode, which keeps SQL from writing files, came in 3.37.
+// mode, which keeps SQL from writing files, came in 3.37. The answer is
+// worked out once per runner.
 func (r *Runner) Available() error {
+	r.once.Do(func() { r.availErr = r.available() })
+	return r.availErr
+}
+
+func (r *Runner) available() error {
 	if _, err := exec.LookPath(r.Bin); err != nil {
 		return ErrNoSQLite3
 	}
@@ -94,57 +106,83 @@ func (e *Error) Error() string {
 	return e.Where + ": " + e.Msg
 }
 
-const sentinel = "@@aftermarket-output@@"
-
-// part is one piece of the input, with a name for errors.
+// part is one piece of the input, with a name for errors. Named parts are
+// SQL from outside (a file, a mapping, a query) and are split and checked
+// before they are sent; unnamed parts are Aftermarket's own shell lines.
 type part struct {
-	name string // "" for glue lines
+	name string
 	text string
+	file bool // name is a file, so errors give its line numbers
 }
 
 // run feeds the parts to sqlite3 on src and returns what was printed after
-// the sentinel.
+// the output marker.
 func (r *Runner) run(ctx context.Context, src Source, parts []part) ([]byte, error) {
 	if err := r.Available(); err != nil {
 		return nil, err
 	}
+	var mark [12]byte
+	if _, err := rand.Read(mark[:]); err != nil {
+		return nil, err
+	}
+	sentinel := "aftermarket-output-" + hex.EncodeToString(mark[:])
+	dir, err := os.MkdirTemp("", "aftermarket-sqlite-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
 	args := []string{r.Bin, "-batch", "-bail", "-safe", "-init", os.DevNull}
 	var in strings.Builder
+	lines := 0
 	var spans []span
-	add := func(name, text string) {
-		start := strings.Count(in.String(), "\n") + 1
+	write := func(text string) {
 		in.WriteString(text)
-		if !strings.HasSuffix(text, "\n") {
-			in.WriteString("\n")
-		}
-		if name != "" {
-			spans = append(spans, span{name: name, first: start, last: strings.Count(in.String(), "\n")})
-		}
+		lines += strings.Count(text, "\n")
 	}
-	add("", ".bail on\n.mode list")
+	add := func(p part) error {
+		if p.name == "" {
+			write(p.text + "\n")
+			return nil
+		}
+		stmts, err := Split(p.text)
+		if err != nil {
+			return &Error{Where: p.name, Msg: err.Error()}
+		}
+		for _, st := range stmts {
+			first := lines + 1
+			write(st.SQL + "\n;\n")
+			spans = append(spans, span{name: p.name, file: p.file, first: first, last: lines, orig: st.Line})
+		}
+		return nil
+	}
+	if err := add(part{text: ".bail on\n.mode list"}); err != nil {
+		return nil, err
+	}
 	if src.SQL {
 		data, err := os.ReadFile(src.Path)
 		if err != nil {
 			return nil, err
 		}
-		if !bytes.HasSuffix(bytes.TrimSpace(data), []byte(";")) && len(bytes.TrimSpace(data)) > 0 {
-			data = append(data, ';')
-		}
-		add(src.Path, string(data))
-	} else {
-		if _, err := os.Stat(src.Path); err != nil {
+		if err := add(part{name: src.Path, text: string(data), file: true}); err != nil {
 			return nil, err
 		}
-		p := src.Path
-		if strings.HasPrefix(p, "-") {
-			p = "." + string(filepath.Separator) + p
+	} else {
+		abs, err := filepath.Abs(src.Path)
+		if err != nil {
+			return nil, err
 		}
-		args = append(args, "-readonly", p)
+		if _, err := os.Stat(abs); err != nil {
+			return nil, err
+		}
+		args = append(args, "-readonly", abs)
 	}
 	for _, pt := range parts {
-		add(pt.name, pt.text)
+		pt.text = strings.ReplaceAll(pt.text, "@SENTINEL@", sentinel)
+		if err := add(pt); err != nil {
+			return nil, err
+		}
 	}
-	res, err := proc.Run(ctx, proc.Spec{Args: args, Stdin: strings.NewReader(in.String()), Timeout: r.Timeout, MaxOut: r.MaxOut})
+	res, err := proc.Run(ctx, proc.Spec{Args: args, Dir: dir, Stdin: strings.NewReader(in.String()), Timeout: r.Timeout, MaxOut: r.MaxOut})
 	if err != nil {
 		return nil, fmt.Errorf("sqlite3 %w", err)
 	}
@@ -152,7 +190,7 @@ func (r *Runner) run(ctx context.Context, src Source, parts []part) ([]byte, err
 		return nil, parseError(string(res.Stderr), spans)
 	}
 	out := res.Stdout
-	i := bytes.Index(out, []byte(sentinel+"\n"))
+	i := bytes.LastIndex(out, []byte(sentinel+"\n"))
 	if i < 0 {
 		return nil, errors.New("sqlite3 printed something unexpected")
 	}
@@ -161,7 +199,9 @@ func (r *Runner) run(ctx context.Context, src Source, parts []part) ([]byte, err
 
 type span struct {
 	name        string
-	first, last int
+	file        bool
+	first, last int // lines in what was sent
+	orig        int // the line the statement starts on in its source
 }
 
 var nearLine = regexp.MustCompile(`^(?:Parse|Runtime) error near line (\d+): (.*)$`)
@@ -175,8 +215,8 @@ func parseError(stderr string, spans []span) error {
 		for _, s := range spans {
 			if n >= s.first && n <= s.last {
 				where := s.name
-				if !strings.HasPrefix(where, "the ") {
-					where = fmt.Sprintf("%s, line %d", where, n-s.first+1)
+				if s.file {
+					where = fmt.Sprintf("%s, line %d", where, s.orig+n-s.first)
 				}
 				return &Error{Where: where, Msg: m[2]}
 			}
@@ -210,38 +250,71 @@ func (r Row) Get(name string) any {
 }
 
 // Query runs setup (statements whose output is ignored, such as temporary
-// views) and then query on src, and returns query's rows.
+// views) and then query, which must be one statement, on src, and returns
+// query's rows.
 func (r *Runner) Query(ctx context.Context, src Source, setup, query string) ([]Row, error) {
-	parts := []part{}
-	if strings.TrimSpace(setup) != "" {
-		parts = append(parts, part{name: "the setup", text: setup + "\n;"})
+	if _, err := One(query); err != nil {
+		return nil, &Error{Where: "the query", Msg: err.Error()}
 	}
-	parts = append(parts, part{text: ".print " + sentinel + "\n.mode json"}, part{name: "the query", text: query + "\n;"})
-	out, err := r.run(ctx, src, parts)
+	out, err := r.run(ctx, src, r.parts(setup, ".mode json", query))
 	if err != nil {
 		return nil, err
 	}
 	return parseRows(out)
 }
 
-// Quoted runs setup and then query on src, and returns query's output with
-// a header line and every value written as an exact SQL literal, so two
-// results can be compared byte for byte, types included.
-func (r *Runner) Quoted(ctx context.Context, src Source, setup, query string) (string, error) {
-	parts := []part{}
+func (r *Runner) parts(setup, mode, query string) []part {
+	var parts []part
 	if strings.TrimSpace(setup) != "" {
-		parts = append(parts, part{name: "the setup", text: setup + "\n;"})
+		parts = append(parts, part{name: "the setup", text: setup})
 	}
-	parts = append(parts, part{text: ".print " + sentinel + "\n.mode quote\n.headers on"}, part{name: "the query", text: query + "\n;"})
-	out, err := r.run(ctx, src, parts)
-	return string(out), err
+	return append(parts, part{text: ".print @SENTINEL@\n" + mode}, part{name: "the query", text: query})
 }
 
-// Check compiles each statement after setup without running it (through
+// insertPrefix starts every row sqlite3 prints in insert mode.
+const insertPrefix = `INSERT INTO "table"(`
+
+// Exact runs setup and then query on src, and returns one line per row,
+// every value written as an exact SQL literal (strings with line breaks
+// escaped, blobs in hex, numbers as SQLite stores them) after the column
+// names, so two results can be compared line for line, types included. A
+// query that gives no rows gives no lines.
+func (r *Runner) Exact(ctx context.Context, src Source, setup, query string) ([]string, error) {
+	if _, err := One(query); err != nil {
+		return nil, &Error{Where: "the query", Msg: err.Error()}
+	}
+	out, err := r.run(ctx, src, r.parts(setup, ".mode insert\n.headers on", query))
+	if err != nil {
+		return nil, err
+	}
+	var rows []string
+	for _, ln := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(ln, insertPrefix):
+			rows = append(rows, strings.TrimPrefix(ln, insertPrefix))
+		case len(rows) > 0:
+			// A column name with a line break in it.
+			rows[len(rows)-1] += "\n" + ln
+		case ln != "":
+			return nil, errors.New("sqlite3 printed something unexpected")
+		}
+	}
+	return rows, nil
+}
+
+// Check compiles a statement after setup without running it (through
 // EXPLAIN), and returns nil when SQLite accepts it.
 func (r *Runner) Check(ctx context.Context, src Source, setup, stmt string) error {
+	st, err := One(stmt)
+	if err != nil {
+		return &Error{Where: "the query", Msg: err.Error()}
+	}
+	q := st.SQL
+	if toks, _ := Lex(q); len(toks) == 0 || toks[0].Upper() != "EXPLAIN" {
+		q = "EXPLAIN " + q
+	}
 	// The shell prints EXPLAIN in its own layout; only the error matters.
-	_, err := r.Quoted(ctx, src, setup, "EXPLAIN "+stmt)
+	_, err = r.run(ctx, src, r.parts(setup, ".mode list", q))
 	return err
 }
 

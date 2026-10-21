@@ -92,7 +92,11 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 		src := sqlitecli.SourceOf(path)
 		s, err := schema.Read(ctx, r, src)
 		if err != nil {
-			fmt.Fprintf(stderr, "%s: %v\n", path, err)
+			if strings.HasPrefix(err.Error(), path) {
+				fmt.Fprintln(stderr, err)
+			} else {
+				fmt.Fprintf(stderr, "%s: %v\n", path, err)
+			}
 			return nil, src, false
 		}
 		return s, src, true
@@ -127,11 +131,20 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 		}
 		changes := schema.Diff(oldS, newS)
 		if m != nil {
+			// Views count as covering only when every one compiles on the
+			// new schema, as compat would require.
 			views, probs := m.Plan(oldS, newS)
+			if len(probs) == 0 {
+				probs = schema.Verify(ctx, r, sqlitecli.SourceOf(*newPath), views)
+			}
 			for _, p := range probs {
 				fmt.Fprintf(stderr, "%s: %s\n", *mapPath, p)
 			}
-			changes = schema.Cover(changes, views)
+			if len(probs) == 0 {
+				changes = schema.Cover(changes, views)
+			} else {
+				fmt.Fprintf(stderr, "%s: the mapping has problems, so no change counts as covered\n", *mapPath)
+			}
 		}
 		broken := schema.Breaking(changes)
 		if *asJSON {
@@ -168,6 +181,12 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		sql := schema.SQL(views, filepath.Base(*mapPath), false)
+		// The script must read as exactly the statements written: BEGIN,
+		// a DROP and a CREATE per view, COMMIT.
+		if stmts, err := sqlitecli.Split(sql); err != nil || len(stmts) != 2*len(views)+2 {
+			fmt.Fprintf(stderr, "aftermarket: the views would not read back as written (%v); nothing was written\n", err)
+			return 1
+		}
 		if err := config.WriteFile(*out, []byte(sql), 0o644); err != nil {
 			fmt.Fprintf(stderr, "aftermarket: %v\n", err)
 			return 1
@@ -185,7 +204,11 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "aftermarket: %v\n", err)
 			return 1
 		}
-		stmts := schema.Split(string(data))
+		stmts, err := schema.Split(string(data))
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", *queries, err)
+			return 1
+		}
 		if len(stmts) == 0 {
 			fmt.Fprintf(stderr, "%s: no statements\n", *queries)
 			return 1

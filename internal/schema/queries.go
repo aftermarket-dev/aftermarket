@@ -3,7 +3,6 @@ package schema
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -13,110 +12,60 @@ import (
 )
 
 // Stmt is one statement from a file of queries, with the line it starts on.
-type Stmt struct {
-	Line int
-	SQL  string
-}
+type Stmt = sqlitecli.Stmt
 
-// Split cuts SQL text into statements at semicolons, skipping those inside
-// strings, quoted names and comments. Statements that are only comments
-// are left out.
-func Split(text string) []Stmt {
-	var out []Stmt
-	start, line, startLine := 0, 1, 0
-	flush := func(end int) {
-		body := strings.TrimSpace(text[start:end])
-		if startLine > 0 && body != "" {
-			out = append(out, Stmt{Line: startLine, SQL: body})
-		}
-		start, startLine = end+1, 0
-	}
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		switch {
-		case c == '\n':
-			line++
-		case c == '-' && strings.HasPrefix(text[i:], "--"):
-			for i < len(text) && text[i] != '\n' {
-				i++
-			}
-			line++
-		case c == '/' && strings.HasPrefix(text[i:], "/*"):
-			end := strings.Index(text[i+2:], "*/")
-			if end < 0 {
-				end = len(text) - i - 2
-			}
-			line += strings.Count(text[i:i+2+end], "\n")
-			i += 2 + end + 1
-		case c == '\'' || c == '"' || c == '`' || c == '[':
-			if startLine == 0 {
-				startLine = line
-			}
-			closer := c
-			if c == '[' {
-				closer = ']'
-			}
-			j := i + 1
-			for j < len(text) {
-				if text[j] == closer {
-					if closer != ']' && j+1 < len(text) && text[j+1] == closer {
-						j += 2
-						continue
-					}
-					break
-				}
-				j++
-			}
-			line += strings.Count(text[i:min(j+1, len(text))], "\n")
-			i = j
-		case c == ';':
-			flush(i)
-		case c == ' ' || c == '\t' || c == '\r':
-		default:
-			if startLine == 0 {
-				startLine = line
-			}
+// Split cuts SQL text into statements as SQLite does (see sqlitecli.Split).
+// Text the sqlite3 shell would read as its own command is refused.
+func Split(text string) ([]Stmt, error) { return sqlitecli.Split(text) }
+
+// words returns a statement's keywords and names outside parentheses, in
+// upper case.
+func words(sql string) []string {
+	toks, _ := sqlitecli.Lex(sql)
+	var w []string
+	for _, t := range toks {
+		if t.Kind == sqlitecli.Word && t.Depth == 0 {
+			w = append(w, t.Upper())
 		}
 	}
-	flush(len(text))
-	// Comments before a statement were skipped when finding its first line,
-	// but its text keeps them; trim leading comment lines for readability.
-	for i := range out {
-		out[i].SQL = stripLeadingComments(out[i].SQL)
-	}
-	return out
+	return w
 }
 
-func stripLeadingComments(s string) string {
-	for {
-		s = strings.TrimSpace(s)
-		switch {
-		case strings.HasPrefix(s, "--"):
-			if j := strings.IndexByte(s, '\n'); j >= 0 {
-				s = s[j+1:]
-				continue
-			}
-			return ""
-		case strings.HasPrefix(s, "/*"):
-			if j := strings.Index(s, "*/"); j >= 0 {
-				s = s[j+2:]
-				continue
-			}
-			return ""
+// IsRead reports whether a statement only reads: a SELECT or VALUES, or a
+// WITH whose main statement is a SELECT. EXPLAIN is not a read here, since
+// its output describes the plan, which differs between schemas.
+func IsRead(sql string) bool {
+	toks, _ := sqlitecli.Lex(sql)
+	first := ""
+	for _, t := range toks {
+		if t.Significant() {
+			first = t.Upper()
+			break
 		}
-		return s
 	}
-}
-
-// IsRead reports whether a statement only reads: SELECT, WITH or VALUES.
-func IsRead(s string) bool {
-	f := strings.Fields(s)
-	if len(f) == 0 {
-		return false
-	}
-	switch strings.ToUpper(f[0]) {
-	case "SELECT", "WITH", "VALUES":
+	switch first {
+	case "SELECT", "VALUES":
 		return true
+	case "WITH":
+		for _, w := range words(sql) {
+			switch w {
+			case "INSERT", "UPDATE", "DELETE", "REPLACE":
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// ordered reports whether a statement asks for an order of its rows: an
+// ORDER BY outside parentheses (not in a subquery or window).
+func ordered(sql string) bool {
+	w := words(sql)
+	for i := 0; i+1 < len(w); i++ {
+		if w[i] == "ORDER" && w[i+1] == "BY" {
+			return true
+		}
 	}
 	return false
 }
@@ -162,8 +111,9 @@ func Check(ctx context.Context, r *sqlitecli.Runner, src sqlitecli.Source, setup
 // Compare runs each read on the old schema and on the new one with setup,
 // and passes it when both give the same rows, column names, values and
 // types alike, in the same order. A query with no ORDER BY promises no
-// order, so for it the same rows in another order pass too. Statements
-// that write are skipped.
+// order, so for it the same rows in another order pass too. When neither
+// side gives any rows, the column names are compared on their own.
+// Statements that write are skipped.
 func Compare(ctx context.Context, r *sqlitecli.Runner, oldSrc, newSrc sqlitecli.Source, setup string, stmts []Stmt) []Result {
 	return parallel(stmts, func(s Stmt) Result {
 		res := Result{Stmt: s}
@@ -171,17 +121,27 @@ func Compare(ctx context.Context, r *sqlitecli.Runner, oldSrc, newSrc sqlitecli.
 			res.OK, res.Skipped = true, "not a read; only reads are compared"
 			return res
 		}
-		want, err := r.Quoted(ctx, oldSrc, "", s.SQL)
+		want, err := r.Exact(ctx, oldSrc, "", s.SQL)
 		if err != nil {
 			res.Problem = "on the old schema: " + message(err)
 			return res
 		}
-		got, err := r.Quoted(ctx, newSrc, setup, s.SQL)
+		got, err := r.Exact(ctx, newSrc, setup, s.SQL)
 		if err != nil {
 			res.Problem = "on the new schema: " + message(err)
 			return res
 		}
-		if want == got || (!orderBy.MatchString(s.SQL) && sameRows(want, got)) {
+		if len(want) == 0 && len(got) == 0 {
+			a, errA := columnNames(ctx, r, oldSrc, "", s.SQL)
+			b, errB := columnNames(ctx, r, newSrc, setup, s.SQL)
+			if errA == nil && errB == nil && !slices.Equal(a, b) {
+				res.Problem = fmt.Sprintf("the column names differ: old %s, new %s", strings.Join(a, ", "), strings.Join(b, ", "))
+				return res
+			}
+			res.OK = true
+			return res
+		}
+		if slices.Equal(want, got) || (!ordered(s.SQL) && sameRows(want, got)) {
 			res.OK = true
 			return res
 		}
@@ -190,18 +150,29 @@ func Compare(ctx context.Context, r *sqlitecli.Runner, oldSrc, newSrc sqlitecli.
 	})
 }
 
-var orderBy = regexp.MustCompile(`(?i)\border\s+by\b`)
+// columnNames gives the names of the columns a read returns, through a
+// temporary view, for results without rows.
+func columnNames(ctx context.Context, r *sqlitecli.Runner, src sqlitecli.Source, setup, query string) ([]string, error) {
+	rows, err := r.Query(ctx, src, setup+"\n;\nCREATE TEMP VIEW \"aftermarket_columns\" AS "+query, `SELECT name FROM pragma_table_info('aftermarket_columns') ORDER BY cid`)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(rows))
+	for i, row := range rows {
+		names[i] = sqlitecli.Str(row.Get("name"))
+	}
+	return names, nil
+}
 
-// sameRows reports whether two quoted results have the same header and the
-// same rows, counting repeats, in any order.
-func sameRows(want, got string) bool {
-	w := strings.Split(strings.TrimSuffix(want, "\n"), "\n")
-	g := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
-	if len(w) != len(g) || w[0] != g[0] {
+// sameRows reports whether two results have the same rows, counting
+// repeats, in any order.
+func sameRows(want, got []string) bool {
+	if len(want) != len(got) {
 		return false
 	}
-	sort.Strings(w[1:])
-	sort.Strings(g[1:])
+	w, g := slices.Clone(want), slices.Clone(got)
+	sort.Strings(w)
+	sort.Strings(g)
 	return slices.Equal(w, g)
 }
 
@@ -212,33 +183,35 @@ func message(err error) string {
 	return err.Error()
 }
 
-// firstDifference describes where two quoted results part. Values are
-// shown, since they come from the sample data the test was given.
-func firstDifference(want, got string) string {
-	w := strings.Split(strings.TrimSuffix(want, "\n"), "\n")
-	g := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
-	for i := 0; i < len(w) || i < len(g); i++ {
-		var a, b string
-		if i < len(w) {
-			a = w[i]
-		}
-		if i < len(g) {
-			b = g[i]
-		}
-		if a == b {
+// split cuts an exact row into its column list and its values.
+func split(row string) (cols, vals string) {
+	i := strings.Index(row, ") VALUES(")
+	if i < 0 {
+		return "", row
+	}
+	return row[:i], "(" + strings.TrimSuffix(row[i+len(") VALUES("):], ";")
+}
+
+// firstDifference describes where two results part. Values are shown,
+// since they come from the sample data the test was given.
+func firstDifference(want, got []string) string {
+	for i := 0; i < len(want) || i < len(got); i++ {
+		switch {
+		case i >= len(want):
+			_, b := split(got[i])
+			return fmt.Sprintf("the new schema gives more rows; first extra: %s", b)
+		case i >= len(got):
+			_, a := split(want[i])
+			return fmt.Sprintf("the new schema gives fewer rows; first missing: %s", a)
+		case want[i] == got[i]:
 			continue
 		}
-		what := fmt.Sprintf("row %d differs", i)
-		if i == 0 {
-			what = "the column names differ"
+		ca, a := split(want[i])
+		cb, b := split(got[i])
+		if ca != cb {
+			return fmt.Sprintf("the column names differ: old %s, new %s", ca, cb)
 		}
-		switch {
-		case i >= len(w):
-			return fmt.Sprintf("the new schema gives more rows; first extra: %s", b)
-		case i >= len(g):
-			return fmt.Sprintf("the new schema gives fewer rows; first missing: %s", a)
-		}
-		return fmt.Sprintf("%s: old %s, new %s", what, a, b)
+		return fmt.Sprintf("row %d differs: old %s, new %s", i+1, a, b)
 	}
 	return "the results differ"
 }

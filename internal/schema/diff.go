@@ -34,8 +34,12 @@ func Diff(old, new *Schema) []Change {
 	for _, ot := range old.Tables {
 		nt := new.Table(ot.Name)
 		if nt == nil {
-			if new.View(ot.Name) != nil {
-				add(Change{Object: ot.Name, Kind: "table", What: "changed", Detail: "now a view", Breaking: false})
+			if nv := new.View(ot.Name); nv != nil {
+				d, breaking := "now a view", false
+				if gone := missingColumns(tableColumnNames(ot), nv.Columns); gone != "" {
+					d, breaking = "now a view that no longer shows "+gone, true
+				}
+				add(Change{Object: ot.Name, Kind: "table", What: "changed", Detail: d, Breaking: breaking})
 				continue
 			}
 			add(Change{Object: ot.Name, Kind: "table", What: "removed", Breaking: true})
@@ -123,6 +127,10 @@ func diffTable(ot, nt *Table, add func(Change)) {
 			} else {
 				details = append(details, "no longer part of the primary key")
 			}
+		}
+		if oc.Rowid && !nc.Rowid {
+			breaking = true
+			details = append(details, "no longer the rowid; its values can differ from rowid")
 		}
 		if oc.Generated != nc.Generated {
 			if nc.Generated {

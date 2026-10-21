@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
+	"github.com/aftermarket-dev/aftermarket/internal/sqlitecli"
 	"github.com/aftermarket-dev/aftermarket/internal/yamlite"
 )
 
@@ -123,6 +124,7 @@ func parseView(n *yamlite.Node, errf func(int, string, ...any)) *ViewMap {
 		return nil
 	}
 	v := &ViewMap{Line: n.Line}
+	whereLine := n.Line
 	for _, p := range n.Pairs {
 		switch p.Key {
 		case "old", "from", "where":
@@ -136,7 +138,7 @@ func parseView(n *yamlite.Node, errf func(int, string, ...any)) *ViewMap {
 			case "from":
 				v.From = p.Value.Value
 			case "where":
-				v.Where = p.Value.Value
+				v.Where, whereLine = p.Value.Value, p.KeyLine
 			}
 		case "columns":
 			if p.Value.Kind == yamlite.Null {
@@ -160,8 +162,8 @@ func parseView(n *yamlite.Node, errf func(int, string, ...any)) *ViewMap {
 						errf(c.KeyLine, "column %s needs an SQL expression (write null for NULL)", c.Key)
 						continue
 					}
-					if strings.Contains(c.Value.Value, ";") && !inQuotes(c.Value.Value, ";") {
-						errf(c.KeyLine, "column %s: one expression, without ;", c.Key)
+					if p := fragment(c.Value.Value); p != "" {
+						errf(c.KeyLine, "column %s: %s", c.Key, p)
 						continue
 					}
 					v.Columns = append(v.Columns, ColumnMap{Line: c.KeyLine, Old: c.Key, Expr: c.Value.Value})
@@ -179,8 +181,10 @@ func parseView(n *yamlite.Node, errf func(int, string, ...any)) *ViewMap {
 	if v.From == "" {
 		errf(n.Line, "a view needs from: the new table it reads")
 	}
-	if v.Where != "" && strings.Contains(v.Where, ";") && !inQuotes(v.Where, ";") {
-		errf(n.Line, "where: one condition, without ;")
+	if v.Where != "" {
+		if p := fragment(v.Where); p != "" {
+			errf(whereLine, "where: %s", p)
+		}
 	}
 	return v
 }
@@ -192,18 +196,24 @@ func orFrom(s string) string {
 	return s
 }
 
-// inQuotes reports whether every occurrence of sub in s sits inside an SQL
-// string literal.
-func inQuotes(s, sub string) bool {
-	in := false
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\'' {
-			in = !in
-			continue
-		}
-		if !in && strings.HasPrefix(s[i:], sub) {
-			return false
+// fragment checks an expression or condition from the mapping: one piece
+// of SQL that ends where it seems to, with nothing the sqlite3 shell could
+// take as its own command. It returns what is wrong, or "".
+func fragment(text string) string {
+	toks, err := sqlitecli.Lex(text)
+	if err != nil {
+		return err.Error()
+	}
+	for _, t := range toks {
+		switch {
+		case t.Kind == sqlitecli.Semi:
+			return "one expression, without ;"
+		case t.Kind == sqlitecli.Comment && strings.HasPrefix(t.Text, "--"):
+			return "no -- comments in SQL here (a # comment after the YAML value, or /* */, works)"
 		}
 	}
-	return true
+	if _, err := sqlitecli.Split(text); err != nil {
+		return err.Error()
+	}
+	return ""
 }

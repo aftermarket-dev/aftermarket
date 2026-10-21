@@ -40,20 +40,14 @@ func read(t *testing.T, r *sqlitecli.Runner, sql string) *Schema {
 	return s
 }
 
-func TestSplit(t *testing.T) {
-	text := "-- header\nSELECT 1;\n\n/* a ; comment */ SELECT 'a;b', \"x;y\", [z;w], `q;r`\n  FROM t; -- trailing ; note\nSELECT 'it''s';\n;;\n  -- only a comment\n"
-	got := Split(text)
-	want := []Stmt{
-		{2, "SELECT 1"},
-		{4, "SELECT 'a;b', \"x;y\", [z;w], `q;r`\n  FROM t"},
-		{6, "SELECT 'it''s'"},
+// mustSplit is Split for test text that is known to be good.
+func mustSplit(t *testing.T, text string) []Stmt {
+	t.Helper()
+	s, err := Split(text)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
-		t.Fatalf("got %q", got)
-	}
-	if s := Split("SELECT 1"); len(s) != 1 || s[0].SQL != "SELECT 1" {
-		t.Fatalf("no final semicolon: %q", s)
-	}
+	return s
 }
 
 func TestDiffMarksWhatBreaks(t *testing.T) {
@@ -244,7 +238,7 @@ func TestDatabasesAreNeverWritten(t *testing.T) {
 		t.Fatal(probs)
 	}
 	setup := SQL(views, "", true)
-	stmts := Split("SELECT * FROM customers; INSERT INTO customers VALUES (2, 'Bob'); DELETE FROM accounts; DROP TABLE accounts")
+	stmts := mustSplit(t, "SELECT * FROM customers; INSERT INTO customers VALUES (2, 'Bob'); DELETE FROM accounts; DROP TABLE accounts")
 	Check(ctx, r, sqlitecli.SourceOf(newDB), setup, stmts)
 	res := Compare(ctx, r, sqlitecli.SourceOf(oldDB), sqlitecli.SourceOf(newDB), setup, stmts)
 	if !res[0].OK || res[1].Skipped == "" {
@@ -341,7 +335,7 @@ func TestRandomRenamesReadTheSame(t *testing.T) {
 		if len(probs) != 0 {
 			t.Fatalf("%v\n%s", probs, mapText.String())
 		}
-		for _, res := range Compare(ctx, r, oldSrc, newSrc, SQL(views, "", true), Split(queries.String())) {
+		for _, res := range Compare(ctx, r, oldSrc, newSrc, SQL(views, "", true), mustSplit(t, queries.String())) {
 			if !res.OK {
 				t.Fatalf("round %d, %s: %s\nmap:\n%s\nold:\n%s\nnew:\n%s", round, res.SQL, res.Problem, mapText.String(), oldSQL.String(), newSQL.String())
 			}
@@ -356,12 +350,154 @@ func TestCompareOrder(t *testing.T) {
 	old := sqlFile(t, "CREATE TABLE t (a); INSERT INTO t VALUES (1), (2), (2), (3);")
 	nw := sqlFile(t, "CREATE TABLE n (a); INSERT INTO n VALUES (3), (2), (1), (2);")
 	setup := "CREATE TEMP VIEW t AS SELECT a FROM n;"
-	res := Compare(context.Background(), r, old, nw, setup, Split("SELECT a FROM t; SELECT a FROM t ORDER BY rowid; SELECT a FROM t WHERE a > 1"))
-	if !res[0].OK || res[1].OK || !strings.Contains(res[1].Problem, "row 1 differs: old 1, new 3") || !res[2].OK {
+	res := Compare(context.Background(), r, old, nw, setup, mustSplit(t, "SELECT a FROM t; SELECT a FROM t ORDER BY rowid; SELECT a FROM t WHERE a > 1"))
+	if !res[0].OK || res[1].OK || !strings.Contains(res[1].Problem, "row 1 differs: old (1), new (3)") || !res[2].OK {
 		t.Fatalf("%+v", res)
 	}
 	nw2 := sqlFile(t, "CREATE TABLE n (a); INSERT INTO n VALUES (3), (2), (1), (1);")
-	if res := Compare(context.Background(), r, old, nw2, setup, Split("SELECT a FROM t")); res[0].OK {
+	if res := Compare(context.Background(), r, old, nw2, setup, mustSplit(t, "SELECT a FROM t")); res[0].OK {
 		t.Fatal("different repeats passed")
+	}
+}
+
+// Values with line breaks, carriage returns and blobs are compared whole:
+// swapping halves between rows must not pass, in any order.
+func TestCompareWholeValues(t *testing.T) {
+	r := runner(t)
+	old := sqlFile(t, "CREATE TABLE notes (body); INSERT INTO notes VALUES ('a'||char(10)||'b'), ('c'||char(10)||'d'), (x'0a00'), ('e'||char(13));")
+	nw := sqlFile(t, "CREATE TABLE memos (body); INSERT INTO memos VALUES ('a'||char(10)||'d'), ('c'||char(10)||'b'), (x'0a00'), ('e'||char(13));")
+	same := sqlFile(t, "CREATE TABLE memos (body); INSERT INTO memos VALUES ('e'||char(13)), (x'0a00'), ('c'||char(10)||'d'), ('a'||char(10)||'b');")
+	setup := "CREATE TEMP VIEW notes AS SELECT body FROM memos;"
+	ctx := context.Background()
+	if res := Compare(ctx, r, old, nw, setup, mustSplit(t, "SELECT body FROM notes")); res[0].OK {
+		t.Fatal("different values passed")
+	} else if !strings.Contains(res[0].Problem, "row 1 differs") {
+		t.Fatalf("%s", res[0].Problem)
+	}
+	if res := Compare(ctx, r, old, same, setup, mustSplit(t, "SELECT body FROM notes")); !res[0].OK {
+		t.Fatalf("the same values in another order: %s", res[0].Problem)
+	}
+}
+
+// With no rows on either side, the column names still count.
+func TestCompareEmptyResults(t *testing.T) {
+	r := runner(t)
+	old := sqlFile(t, "CREATE TABLE c (id, name);")
+	nw := sqlFile(t, "CREATE TABLE n (id, first);")
+	ctx := context.Background()
+	res := Compare(ctx, r, old, nw, "CREATE TEMP VIEW c AS SELECT id, first FROM n;", mustSplit(t, "SELECT * FROM c"))
+	if res[0].OK || !strings.Contains(res[0].Problem, "the column names differ: old id, name, new id, first") {
+		t.Fatalf("%+v", res[0])
+	}
+	res = Compare(ctx, r, old, nw, `CREATE TEMP VIEW c ("id", "name") AS SELECT id, first FROM n;`, mustSplit(t, "SELECT * FROM c"))
+	if !res[0].OK {
+		t.Fatalf("%+v", res[0])
+	}
+}
+
+func TestReadsAndOrder(t *testing.T) {
+	for sql, want := range map[string]bool{
+		"SELECT 1":                             true,
+		"  /* c */ select 1":                   true,
+		"VALUES (1)":                           true,
+		"WITH x AS (SELECT 1) SELECT * FROM x": true,
+		"WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x": false,
+		"WITH x AS (SELECT 1) DELETE FROM t":                 false,
+		"EXPLAIN SELECT 1":                                   false,
+		"EXPLAIN QUERY PLAN SELECT 1":                        false,
+		"PRAGMA table_info(t)":                               false,
+		"INSERT INTO t VALUES (1)":                           false,
+	} {
+		if IsRead(sql) != want {
+			t.Errorf("IsRead(%q) = %v", sql, !want)
+		}
+	}
+	for sql, want := range map[string]bool{
+		"SELECT a FROM t ORDER BY a":                               true,
+		"SELECT a FROM (SELECT a FROM t ORDER BY a)":               false,
+		"SELECT row_number() OVER (ORDER BY a) FROM t":             false,
+		"SELECT 'ORDER BY' FROM t":                                 false,
+		"SELECT a FROM t -- ORDER BY a":                            false,
+		"SELECT a FROM t WHERE b IN (SELECT b FROM u) order  by a": true,
+	} {
+		if ordered(sql) != want {
+			t.Errorf("ordered(%q) = %v", sql, !want)
+		}
+	}
+}
+
+// check compiles EXPLAIN statements and triggers as they are.
+func TestCheckExplainAndTriggers(t *testing.T) {
+	r := runner(t)
+	src := sqlFile(t, "CREATE TABLE t (a);")
+	stmts := mustSplit(t, "EXPLAIN QUERY PLAN SELECT a FROM t;\nCREATE TRIGGER tr AFTER INSERT ON t BEGIN\n  SELECT 1;\n  SELECT 2;\nEND;\nSELECT a FROM t")
+	if len(stmts) != 3 {
+		t.Fatalf("%q", stmts)
+	}
+	for _, res := range Check(context.Background(), r, src, "", stmts) {
+		if !res.OK {
+			t.Errorf("line %d: %s", res.Line, res.Problem)
+		}
+	}
+}
+
+// SQL in the mapping must be one piece that ends where it seems to.
+func TestMapFragments(t *testing.T) {
+	for _, bad := range []string{
+		`deleted_at IS NULL /* ' */; DELETE FROM accounts`,
+		`deleted_at IS NULL -- 2.0 keeps deleted`,
+		"deleted_at IS NULL\n/\n.trace x",
+		"deleted_at IS NULL\nGO",
+		`"x;y" ; 1`,
+		`'never ends`,
+		`1 /* never ends`,
+	} {
+		yaml := "version: 1\nold: o\nviews:\n  - old: a\n    from: b\n    where: " + quoteYAML(bad) + "\n    columns:\n      c: " + quoteYAML(bad) + "\n"
+		_, err := ParseMap([]byte(yaml), ".")
+		if err == nil || strings.Count(err.Error(), "line ") < 2 {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	good := "version: 1\nold: o\nviews:\n  - old: a\n    from: b\n    where: \"note = 'x;y' /* ok */\"  # a YAML comment\n    columns:\n      c: \"\\\"we;ird\\\" || ';'\"\n"
+	if _, err := ParseMap([]byte(good), "."); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func quoteYAML(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`).Replace(s) + `"`
+}
+
+func TestDiffDetails(t *testing.T) {
+	r := runner(t)
+	old := read(t, r, `CREATE TABLE customers (id, name, fax);
+CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT DEFAULT 'WITHOUT ROWID');
+CREATE TABLE ids (id INTEGER PRIMARY KEY, v);
+CREATE VIRTUAL TABLE docs USING fts5(body);`)
+	nw := read(t, r, `CREATE TABLE accounts (id, name);
+CREATE VIEW customers AS SELECT id FROM accounts;
+CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT DEFAULT 'WITHOUT ROWID');
+CREATE TABLE ids (id INT PRIMARY KEY, v);
+CREATE VIRTUAL TABLE docs USING fts5(body);`)
+	var lines []string
+	for _, c := range Diff(old, nw) {
+		lines = append(lines, fmt.Sprintf("%v %s", c.Breaking, c))
+	}
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{
+		"true table customers changed (now a view that no longer shows name, fax)",
+		"true column ids.id changed (declared type INTEGER -> INT, same affinity; no longer the rowid; its values can differ from rowid)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	for _, not := range []string{"notes", "docs_", "rank"} {
+		if strings.Contains(got, not) {
+			t.Errorf("%q should not appear in\n%s", not, got)
+		}
+	}
+	if d := old.Table("docs"); d == nil || len(d.Columns) != 1 {
+		t.Fatalf("the virtual table's hidden columns were kept: %+v", d)
 	}
 }

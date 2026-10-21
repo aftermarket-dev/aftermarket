@@ -53,7 +53,10 @@ func TestOldReportsReadTheSame(t *testing.T) {
 	r, m := setup(t)
 	ctx := context.Background()
 	data, _ := os.ReadFile("reports.sql")
-	stmts := schema.Split(string(data))
+	stmts, err := schema.Split(string(data))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(stmts) != 12 {
 		t.Fatalf("%d statements", len(stmts))
 	}
@@ -87,7 +90,7 @@ func TestLostDataIsCaught(t *testing.T) {
 	withFax := filepath.Join(t.TempDir(), "shop.sql")
 	os.WriteFile(withFax, []byte(string(v1)+"\nUPDATE customers SET fax = '+44 20 7946 0000' WHERE id = 1;\n"), 0o600)
 	views, newSrc := plan(t, r, m, withFax)
-	stmts := schema.Split("SELECT id, name, fax FROM customers ORDER BY id;\nSELECT count(*) FROM customers;")
+	stmts, _ := schema.Split("SELECT id, name, fax FROM customers ORDER BY id;\nSELECT count(*) FROM customers;")
 	res := schema.Compare(context.Background(), r, sqlitecli.SourceOf(withFax), newSrc, schema.SQL(views, "", true), stmts)
 	if res[0].OK || !strings.Contains(res[0].Problem, "row 1 differs") || !res[1].OK {
 		t.Fatalf("%+v", res)

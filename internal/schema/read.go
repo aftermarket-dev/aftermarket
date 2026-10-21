@@ -49,6 +49,7 @@ type Column struct {
 	Default   *string // as written in the schema, nil for none
 	PK        int     // position in the primary key, 0 when not part of it
 	Generated bool
+	Rowid     bool // the table's INTEGER PRIMARY KEY, another name for its rowid
 }
 
 // Index is one index on a table.
@@ -101,8 +102,12 @@ func (t *Table) Column(name string) *Column {
 // Read reads src's schema.
 func Read(ctx context.Context, r *sqlitecli.Runner, src sqlitecli.Source) (*Schema, error) {
 	s := &Schema{}
-	objs, err := r.Query(ctx, src, "", `SELECT type, name, tbl_name, coalesce(sql, '') AS sql FROM sqlite_schema
- WHERE name NOT LIKE 'sqlite\_%' ESCAPE '\' ORDER BY type, name`)
+	// pragma_table_list says which tables are WITHOUT ROWID or STRICT, and
+	// which are only the inner tables of a virtual table (shadow tables).
+	objs, err := r.Query(ctx, src, "", `SELECT m.type, m.name, m.tbl_name, coalesce(m.sql, '') AS sql,
+ coalesce(l.type, '') AS ltype, coalesce(l.wr, 0) AS wr, coalesce(l.strict, 0) AS strict
+ FROM sqlite_schema m LEFT JOIN pragma_table_list l ON l.schema = 'main' AND l.name = m.name
+ WHERE m.name NOT LIKE 'sqlite\_%' ESCAPE '\' ORDER BY m.type, m.name`)
 	if err != nil {
 		return nil, err
 	}
@@ -112,8 +117,10 @@ func Read(ctx context.Context, r *sqlitecli.Runner, src sqlitecli.Source) (*Sche
 		typ, name, sql := sqlitecli.Str(o.Get("type")), sqlitecli.Str(o.Get("name")), sqlitecli.Str(o.Get("sql"))
 		switch typ {
 		case "table":
-			upper := strings.ToUpper(sql)
-			t := &Table{Name: name, NoRowid: strings.Contains(upper, "WITHOUT ROWID"), Strict: tableOption(upper, "STRICT")}
+			if sqlitecli.Str(o.Get("ltype")) == "shadow" {
+				continue
+			}
+			t := &Table{Name: name, NoRowid: sqlitecli.Int(o.Get("wr")) != 0, Strict: sqlitecli.Int(o.Get("strict")) != 0}
 			s.Tables = append(s.Tables, t)
 			tables[strings.ToLower(name)] = t
 		case "view":
@@ -137,7 +144,8 @@ func Read(ctx context.Context, r *sqlitecli.Runner, src sqlitecli.Source) (*Sche
 			continue
 		}
 		t := tables[tbl]
-		if t == nil {
+		if t == nil || sqlitecli.Int(c.Get("hidden")) == 1 {
+			// Hidden columns belong to virtual tables (fts5's rank, say).
 			continue
 		}
 		col := Column{
@@ -192,21 +200,17 @@ func Read(ctx context.Context, r *sqlitecli.Runner, src sqlitecli.Source) (*Sche
 		fk.From = append(fk.From, sqlitecli.Str(c.Get("c_from")))
 		fk.To = append(fk.To, sqlitecli.Str(c.Get("c_to")))
 	}
-	sort.SliceStable(s.Tables, func(i, j int) bool { return strings.ToLower(s.Tables[i].Name) < strings.ToLower(s.Tables[j].Name) })
-	return s, nil
-}
-
-// tableOption reports whether a CREATE TABLE statement ends with opt among
-// its table options (after the closing parenthesis).
-func tableOption(upper, opt string) bool {
-	i := strings.LastIndex(upper, ")")
-	if i < 0 {
-		return false
-	}
-	for _, o := range strings.Split(upper[i+1:], ",") {
-		if strings.TrimSpace(o) == opt {
-			return true
+	for _, t := range s.Tables {
+		var pk []*Column
+		for i := range t.Columns {
+			if t.Columns[i].PK > 0 {
+				pk = append(pk, &t.Columns[i])
+			}
+		}
+		if !t.NoRowid && len(pk) == 1 && strings.EqualFold(strings.TrimSpace(pk[0].Type), "INTEGER") {
+			pk[0].Rowid = true
 		}
 	}
-	return false
+	sort.SliceStable(s.Tables, func(i, j int) bool { return strings.ToLower(s.Tables[i].Name) < strings.ToLower(s.Tables[j].Name) })
+	return s, nil
 }

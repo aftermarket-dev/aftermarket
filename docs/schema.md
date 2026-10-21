@@ -52,7 +52,7 @@ views:
 
 Old columns that aren't listed keep their name: the view reads the column with the same name in `from`, and `compat` stops if there is none. Each view shows every old column, in the old order, so `SELECT *` and `INSERT ... SELECT` keep the old shape.
 
-Expressions are plain SQL and may call any function SQLite has. They may not contain `;`. An expression that doesn't compile on the new schema is reported with its line in the mapping file.
+Expressions are plain SQL and may call any function SQLite has. Each must be one piece of SQL: no `;`, no `--` comment (put a `#` comment after the YAML value instead, or use `/* */`), and no string or comment left open. An expression that doesn't compile on the new schema is reported with its line in the mapping file.
 
 ## diff
 
@@ -68,7 +68,7 @@ v1/shop.sql -> v2/shop.sql: 5 change(s), 2 breaking
   safe      table purchases added (id, account_id, total_cents, state, placed_at)
 ```
 
-Breaking: a table, view or column removed; a column whose type now reads values differently (a different type affinity); a column that may now be NULL; a view that no longer shows a column; a table that became `WITHOUT ROWID`. Other changes are listed as safe, with a note where old writes could now fail, such as a new `NOT NULL` column with no default, a new unique index or a table that became `STRICT`. Declared types with the same affinity (`VARCHAR(10)` and `TEXT`) are the same to SQLite and are listed as safe.
+Breaking: a table, view or column removed; a table replaced by a view that doesn't show all its columns; an `INTEGER PRIMARY KEY` that is no longer the table's rowid; a column whose type now reads values differently (a different type affinity); a column that may now be NULL; a view that no longer shows a column; a table that became `WITHOUT ROWID`. Other changes are listed as safe, with a note where old writes could now fail, such as a new `NOT NULL` column with no default, a new unique index or a table that became `STRICT`. Declared types with the same affinity (`VARCHAR(10)` and `TEXT`) are the same to SQLite and are listed as safe.
 
 With `--map`, breaking changes the views take care of are marked `covered`:
 
@@ -80,7 +80,7 @@ v1/shop.sql -> v2/shop.sql: 5 change(s), 0 breaking
   ...
 ```
 
-`diff` exits 1 when any breaking change is left uncovered, so it fits in CI. `--json` prints the same list as JSON.
+A view counts as covering only when every view in the mapping compiles on the new schema; otherwise the problems are listed and nothing is marked covered. `diff` exits 1 when any breaking change is left uncovered, so it fits in CI. `--json` prints the same list as JSON. The inner tables of a virtual table (such as FTS5's) and its hidden columns aren't listed.
 
 ## compat
 
@@ -127,7 +127,7 @@ $ aftermarket schema check --queries reports.sql --map map.yaml
 12 of 12 queries compile on the new schema with the compatibility views
 ```
 
-The queries file holds statements separated by `;`, with `--` and `/* */` comments, as in any `.sql` file. Writes are compiled too, so `check` also shows which old `INSERT`, `UPDATE` and `DELETE` statements no longer fit.
+The queries file holds statements separated by `;`, with `--` and `/* */` comments, as in any `.sql` file; a `CREATE TRIGGER` ends at the `;` after its `END`. Writes are compiled too, so `check` also shows which old `INSERT`, `UPDATE` and `DELETE` statements no longer fit. `EXPLAIN` statements are compiled as they are.
 
 ## test
 
@@ -140,14 +140,14 @@ PASS  line 4: SELECT id, name, email FROM customers ORDER BY id
 12 of 12 reads give the same rows on the new schema with the compatibility views as on the old one
 ```
 
-Results must match in column names, values and types: `1` and `1.0` and `'1'` are all different. A query with `ORDER BY` must give the rows in the same order; one without may give them in any order. Statements that write are skipped. When a read differs, `test` names the first row that differs and shows both values, so give it sample data, not production data. It exits 1 on any difference.
+Results must match in column names, values and types: `1` and `1.0` and `'1'` are all different, and a text with a line break is compared whole. When neither side gives any rows, the column names are still compared. A query with `ORDER BY` must give the rows in the same order, ties included; one without may give them in any order (an `ORDER BY` inside a subquery or a window doesn't count). Only reads are compared: `SELECT`, `VALUES`, and `WITH` when its main statement is a `SELECT`. Everything else, `EXPLAIN` included, is skipped. When a read differs, `test` names the first row that differs and shows both values, so give it sample data, not production data. It exits 1 on any difference.
 
 For `test` to mean something, the old and new databases must hold the same data, each in its own shape: for example a copy of the old database and the result of running your migration on it.
 
 ## Promises
 
-- **No database is ever written.** Databases are opened read-only and the `sqlite3` shell runs in safe mode, so even SQL in the mapping can't write, attach another file or run a program. `.sql` files are loaded into memory. The tests compare every file byte for byte before and after.
-- **`compat` writes only its `--out` file**, never one of its inputs, and only when every view compiles on the new schema.
+- **No database is ever written.** Databases are opened read-only and the `sqlite3` shell runs in safe mode, from an empty temporary folder, so SQL can't write, attach another file or run a program. `.sql` files are loaded into memory. Every piece of SQL from a file or a mapping is split into statements first, and refused if the `sqlite3` shell could read any of it as one of its own commands (a line starting with `.` between statements, or a line that is only `GO` or `/`) or if a string or comment never ends. The tests try these attacks and check that every file stays the same byte for byte and no new file appears.
+- **`compat` writes only its `--out` file**, never one of its inputs, and only when every view compiles on the new schema and the script reads back as exactly the statements written. The tests apply it to a real database.
 - **The same mapping always writes the same file.**
 - **What `test` passes reads the same.** Every read in the queries file gives the same rows, with the same types, through the views as on the old database. The tests check this with randomly generated schemas, renames, split columns and scaled numbers.
 
@@ -157,4 +157,5 @@ For `test` to mean something, the old and new databases must hold the same data,
 - A view can't have the same name as a table, so an old table whose name the new schema still uses for a table can't get a compatibility view. `diff` lists the changes to that table, and the mapping refuses it with a clear message.
 - One old table is read from one new table or view. When an old table is spread over several new ones, create a view in the new database that joins them and map to that.
 - SQLite only. Other databases have different rules for views and types.
+- A database in WAL mode gets the usual `-wal` and `-shm` helper files next to it when it is read, as with any SQLite reader. The database file itself is not changed.
 - `test` compares results on the data it is given. It can't know about rows the sample doesn't hold, such as an old customer who still had a fax number.
