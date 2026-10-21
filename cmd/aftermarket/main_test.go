@@ -316,3 +316,39 @@ func TestHookCommands(t *testing.T) {
 		t.Fatalf("check printed a secret: %d %q %q", code, out, errs)
 	}
 }
+
+func TestGuardCommands(t *testing.T) {
+	cfg := "../../examples/legacy-admin/guard.yaml"
+	code, out, errs := runCLI("guard", "check", "--config", cfg)
+	if code != 0 || !strings.Contains(out, "4 rule(s), 2 client(s), default deny") || !strings.Contains(out, "reachable only through AfterGuard") {
+		t.Fatalf("check: %d %q %q", code, out, errs)
+	}
+	code, out, _ = runCLI("guard", "test", "--config", cfg, "--fixture", "../../examples/legacy-admin/fixture.yaml")
+	if code != 0 || !strings.Contains(out, "9 case(s), 0 failed") {
+		t.Fatalf("test: %d %q", code, out)
+	}
+	for _, args := range [][]string{{"guard"}, {"guard", "nope"}, {"guard", "check"}, {"guard", "test", "--config", cfg},
+		{"guard", "run", "--config", cfg}, {"guard", "hash", "secret-as-an-argument"}} {
+		if code, _, _ := runCLI(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	dir := t.TempDir()
+	bad := filepath.Join(dir, "bad.yaml")
+	os.WriteFile(bad, []byte("rules:\n  - id: a\n    allow: maybe\n"), 0o644)
+	if code, _, errs := runCLI("guard", "check", "--config", bad); code != 1 || !strings.Contains(errs, "line 3") {
+		t.Fatalf("bad config: %d %q", code, errs)
+	}
+	// hash reads the secret from standard input, never from the command line.
+	old := stdin
+	defer func() { stdin = old }()
+	stdin = strings.NewReader("billing-demo-key-change-me\n")
+	code, out, _ = runCLI("guard", "hash")
+	if code != 0 || strings.TrimSpace(out) != "f04bf1cd97cf76f0f2d928e4e1fa56033548cf50826db9f0c265d1f349e28c84" {
+		t.Fatalf("hash: %d %q", code, out)
+	}
+	stdin = strings.NewReader("short\n")
+	if code, _, errs := runCLI("guard", "hash"); code != 0 || !strings.Contains(errs, "can be guessed") {
+		t.Fatalf("short key: %d %q", code, errs)
+	}
+}

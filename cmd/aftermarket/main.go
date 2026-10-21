@@ -49,6 +49,11 @@ Usage:
   aftermarket hook run   --config hook.yaml [--once] [--dry-run] [--log FILE|-]
   aftermarket hook test  --config hook.yaml --fixture fixture.yaml
 
+  aftermarket guard run   --config guard.yaml --upstream URL [--listen ADDR] [--dry-run] [--log FILE|-]
+  aftermarket guard check --config guard.yaml
+  aftermarket guard test  --config guard.yaml --fixture fixture.yaml
+  aftermarket guard hash  < key.txt
+
   aftermarket version
 
 patch fixes requests and responses with small rules. adapt maps old API
@@ -57,7 +62,8 @@ credentials removed, and replay sends them to two versions of a service and
 reports the differences. config changes a vendor's config file through an
 overlay, without ever editing the file itself. hook watches files, folders,
 HTTP endpoints and command output, and sends a signed webhook for each
-change. Add -h to any command for its options.
+change. guard stands in front of an app that can't protect itself, and turns
+away requests that break its rules. Add -h to any command for its options.
 Manual: https://github.com/aftermarket-dev/aftermarket
 `
 
@@ -89,6 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runConfig(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdout, stderr)
+	case "guard":
+		return runGuard(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "aftermarket: unknown command %q\n\n%s", args[0], usage)
 	return 2

@@ -113,6 +113,8 @@ jobs:
             mkdir -p "$work/examples/legacy-app/exports" "$work/examples/legacy-app/receiver"
             cp examples/legacy-app/hook.yaml examples/legacy-app/fixture.yaml examples/legacy-app/status.json "$work/examples/legacy-app/"
             cp examples/legacy-app/receiver/main.go "$work/examples/legacy-app/receiver/"
+            mkdir -p "$work/examples/legacy-admin"
+            cp examples/legacy-admin/guard.yaml examples/legacy-admin/fixture.yaml "$work/examples/legacy-admin/"
             if [ "$os" = windows ]; then
               (cd "$(dirname "$work")" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
             else
@@ -197,6 +199,25 @@ jobs:
           grep -q '"changed"' hooksmoke/log.jsonl
           grep -q '"retry"' hooksmoke/log.jsonl
           grep -q '"event_id"' hooksmoke/st.json
+          $PREFIX "$bin" guard check --config examples/legacy-admin/guard.yaml
+          $PREFIX "$bin" guard test --config examples/legacy-admin/guard.yaml --fixture examples/legacy-admin/fixture.yaml
+          # A live guard in front of an app that isn't there: rules decide
+          # without it, and what they allow gets a clean 502.
+          $PREFIX "$bin" guard run --config examples/legacy-admin/guard.yaml --upstream http://127.0.0.1:1 --listen 127.0.0.1:18080 --log guard.log &
+          gpid=$!
+          for i in $(seq 1 50); do
+            curl -s -o /dev/null http://127.0.0.1:18080/_aftermarket/healthz && break
+            sleep 0.2
+          done
+          code() { curl -s -o /dev/null -w '%{http_code}' --path-as-is "$@"; }
+          [ "$(code http://127.0.0.1:18080/_aftermarket/healthz)" = 200 ]
+          [ "$(code http://127.0.0.1:18080/debug/env)" = 404 ]
+          [ "$(code http://127.0.0.1:18080/admin/users)" = 401 ]
+          [ "$(code 'http://127.0.0.1:18080/status/..%2fadmin/users')" = 400 ]
+          [ "$(code http://127.0.0.1:18080/status)" = 502 ]
+          kill $gpid || true
+          grep -q '"event":"denied"' guard.log
+          grep -q '"event":"rejected"' guard.log
           # The vendor's file is never written.
           if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --out examples/vendor-app/1.0/config.json; then exit 1; fi
 

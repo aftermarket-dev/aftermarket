@@ -10,12 +10,13 @@ Aftermarket is one program, `aftermarket`, with a subcommand per tool. The tools
 - **AfterDiff** (`aftermarket replay`) sends those fixtures to two versions of a service and reports where the answers differ.
 - **AfterConfig** (`aftermarket config`) changes a vendor's config file through an overlay, without ever editing the file, and stops when an upgrade changed something your overlay relies on.
 - **AfterHook** (`aftermarket hook`) watches files, folders, HTTP endpoints and command output that change without telling anyone, and sends a signed webhook for each change.
+- **AfterGuard** (`aftermarket guard`) stands in front of an app that can't protect itself, such as an old admin panel with no login, and turns away requests that break your rules: no credential, wrong network, too many tries, or a request that could be read two ways.
 
 It's a single Go binary with no dependencies, licensed under Apache 2.0. Website: [aftermarket.dev](https://aftermarket.dev/).
 
 ## Which tool?
 
-Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know.
+Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know. Use **guard** when an app has no login, no rate limits or a page that should never have been public, and you can't change the app.
 
 ## AfterPatch in one example
 
@@ -200,6 +201,40 @@ Each change becomes one signed POST, listed by field:
 
 The first check only sets a baseline. A file rewritten with the same content, or a change to an ignored field, sends nothing. A file still being written waits for the next check, and one that disappears or shrinks by more than half is only reported when the next check sees the same. While the receiver is down, events wait in the state file and are retried until delivered, in order, across restarts. The example is [`examples/legacy-app`](examples/legacy-app), with a receiver that checks signatures, and the full format is in [docs/hook.md](docs/hook.md).
 
+## AfterGuard in one example
+
+An old admin panel has no login, a debug page that prints a database password, and nothing against password guessing. AfterGuard goes in front of it:
+
+```yaml
+version: 1
+default: deny
+clients:
+  - id: admin
+    basic_user: admin
+    basic_password_sha256: 729d88640e95cc2e6a8a188e992f87a3502602dc7ed49543d9454ea1bc0fc429  # aftermarket guard hash
+rules:
+  - id: status
+    when: {method: GET, path: /status}
+    allow: true
+  - id: no-debug
+    when: {path: /debug/**}
+    deny: 404
+  - id: admin-office
+    when: {path: /admin/**}
+    from: [192.168.0.0/16]
+    client: [admin]
+    allow: true
+    limit: {rate: 60/m, burst: 10}
+response:
+  remove_headers: [Server, X-Powered-By]
+```
+
+```sh
+aftermarket guard run --config guard.yaml --upstream http://127.0.0.1:9100 --listen :8080
+```
+
+The first rule that matches decides, and a request no rule allows gets 403. The admin pages need the admin login, from the office network; five wrong passwords from one address and that address waits. A request that could be read two ways, such as `/x/..%2fadmin` or one with both `Content-Length` and `Transfer-Encoding`, gets 400 and never reaches the app. Every decision is logged as one JSON line, without credentials. The app must listen where only AfterGuard can reach it, such as `127.0.0.1`. The example is [`examples/legacy-admin`](examples/legacy-admin), the full format is in [docs/guard.md](docs/guard.md), and what AfterGuard defends against is in [docs/guard-threat-model.md](docs/guard-threat-model.md).
+
 ## Install
 
 Download the archive for your system from the [latest release](https://github.com/aftermarket-dev/aftermarket/releases/latest), unpack it and put `aftermarket` on your PATH.
@@ -270,6 +305,11 @@ aftermarket hook check --config hook.yaml
 aftermarket hook run   --config hook.yaml [--once] [--dry-run] [--log FILE|-]
 aftermarket hook test  --config hook.yaml --fixture fixture.yaml
 
+aftermarket guard run   --config guard.yaml --upstream URL [--listen ADDR] [--dry-run] [--log FILE|-]
+aftermarket guard check --config guard.yaml
+aftermarket guard test  --config guard.yaml --fixture fixture.yaml
+aftermarket guard hash  < key.txt
+
 aftermarket version
 ```
 
@@ -296,6 +336,7 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **Recording changes zero bytes too**, and streams. Credential headers and query keys are always saved as `REDACTED`, and so are the headers, query keys and JSON fields you list; the tests send secrets both ways and search the file for them. Values in a URL path and in bodies that aren't JSON are saved as sent. An exchange that can't be stored safely (too big, not text, compressed in a way record can't read, or cut off) still passes through and is logged as skipped.
 - **Replay doesn't change data unless you ask.** Only GET and HEAD are sent without `--include-writes`.
 - **hook delivers every change at least once.** Each change gives exactly one event, nothing is lost while the receiver is down or across restarts, and a repeat after a crash carries the same id. Values under secret-looking keys are sent as `REDACTED`, and the signing secret never leaves the environment.
+- **guard lets through only what the rules allow, and nothing that could be read two ways.** A request turned away never reaches the app, allowed traffic passes byte for byte, rate limits hold with many clients at once and can't be used to fill memory, a client can't set its own identity or address, and no credential reaches the log. The tests check each of these.
 - **config never writes the vendor's file,** whatever path you give `--out`. A failed apply leaves the old output as it was, and applying twice gives the same bytes. Values under keys such as `password` or `token` are never printed.
 
 Recorded results, including the latency each tool adds, are in [test/results](test/results).
@@ -308,6 +349,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - adapt doesn't rewrite `Location` headers or links inside bodies, so a redirect from the new API points at a new URL.
 - Captured parameters are always strings. A template that needs a number from the URL gets `"7"`, not `7`.
 - AfterHook checks on an interval instead of using the operating system's file notifications, so a change is seen within one interval (5 seconds by default), and a removal within two. It watches SQLite through the `sqlite3` command, which must be installed. In a folder, a file rewritten with the same size and modification time isn't noticed.
+- AfterGuard checks API keys and HTTP Basic logins; single sign-on (OAuth, OpenID Connect) isn't there yet. It has no attack signatures for SQL injection and the like, rate limits aren't shared between several AfterGuard processes, and it serves HTTP/1.1 only.
 - AfterConfig doesn't read TOML yet, and doesn't keep comments when it writes YAML. The vendor's file keeps them.
 - Config files use a strict subset of YAML: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
 - One upstream per proxy. Run one proxy per service.
@@ -322,7 +364,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.5.0 adds `aftermarket hook` (AfterHook). 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.6.0 adds `aftermarket guard` (AfterGuard). 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 

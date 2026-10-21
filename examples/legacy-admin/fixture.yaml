@@ -1,0 +1,58 @@
+cases:
+  - name: the status check is open
+    request: {method: GET, path: /status}
+    expect: {decision: allowed, rule: status}
+
+  - name: the debug page is hidden from everyone
+    request:
+      method: GET
+      path: /debug/env
+      headers: {Authorization: Basic YWRtaW46YWRtaW4tZGVtby1wYXNzd29yZC1jaGFuZ2UtbWU=}
+    expect: {decision: denied, status: 404, rule: no-debug}
+
+  - name: the admin pages need a login
+    request: {method: GET, path: /admin/users}
+    expect: {decision: denied, status: 401, rule: admin-office}
+
+  - name: the admin login works from the office
+    request:
+      method: GET
+      path: /admin/users
+      from: 192.168.1.20
+      headers: {Authorization: Basic YWRtaW46YWRtaW4tZGVtby1wYXNzd29yZC1jaGFuZ2UtbWU=}
+    expect: {decision: allowed, rule: admin-office, client: admin}
+
+  - name: the admin login from outside the office matches no rule
+    request:
+      method: GET
+      path: /admin/users
+      from: 203.0.113.7
+      headers: {Authorization: Basic YWRtaW46YWRtaW4tZGVtby1wYXNzd29yZC1jaGFuZ2UtbWU=}
+    expect: {decision: denied, status: 403, rule: "-"}
+
+  - name: billing's key reads reports
+    request:
+      method: GET
+      path: /reports/daily
+      headers: {X-Api-Key: billing-demo-key-change-me}
+    expect: {decision: allowed, rule: reports, client: billing}
+
+  - name: billing's key doesn't open the admin pages
+    request:
+      method: GET
+      path: /admin/users
+      headers: {X-Api-Key: billing-demo-key-change-me}
+    expect: {decision: denied, status: 403, client: billing}
+
+  - name: a path trick is rejected, not cleaned up
+    request: {method: GET, path: /status/..%2fadmin/users}
+    expect: {decision: rejected, status: 400}
+
+  - name: guessing passwords stops after five tries
+    request:
+      method: GET
+      path: /admin/users
+      from: 192.168.1.66
+      headers: {Authorization: Basic YWRtaW46Z3Vlc3M=}
+    times: 6
+    expect: {decision: limited, status: 429}

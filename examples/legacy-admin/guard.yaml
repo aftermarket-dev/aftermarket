@@ -1,0 +1,58 @@
+# AfterGuard config for an old admin panel that has no login of its own.
+version: 1
+
+# A request no rule allows is turned away.
+default: deny
+
+credentials:
+  api_key_header: X-Api-Key
+  # The app is told who called in this header. Client copies are removed.
+  identity_header: X-Aftermarket-Client
+  # Five wrong keys or passwords a minute from one address, then 429.
+  failed_logins: {rate: 5/m, burst: 5}
+
+# Hashes only, never the keys themselves: make them with
+#   aftermarket guard hash
+# The demo values are billing-demo-key-change-me and
+# admin-demo-password-change-me. Change them before real use.
+clients:
+  - id: billing
+    api_key_sha256: f04bf1cd97cf76f0f2d928e4e1fa56033548cf50826db9f0c265d1f349e28c84
+  - id: admin
+    basic_user: admin
+    basic_password_sha256: 729d88640e95cc2e6a8a188e992f87a3502602dc7ed49543d9454ea1bc0fc429
+
+rules:
+  # The load balancer's check, open to all, within reason.
+  - id: status
+    when: {method: [GET, HEAD], path: /status}
+    allow: true
+    limit: {rate: 60/m, burst: 20}
+
+  # A debug page that prints passwords. Nobody gets it.
+  - id: no-debug
+    when: {path: /debug/**}
+    deny: 404
+
+  # Billing pulls daily reports with its key.
+  - id: reports
+    when: {method: GET, path: /reports/**}
+    client: [billing, admin]
+    allow: true
+    limit: {rate: 120/m, burst: 30, per: client}
+
+  # The admin pages: the admin login, from the office network only.
+  - id: admin-office
+    when: {path: /admin/**}
+    from: [127.0.0.0/8, "::1", 192.168.0.0/16]
+    client: [admin]
+    allow: true
+    max_body: 64KiB
+    json: true
+
+response:
+  set_headers:
+    X-Content-Type-Options: nosniff
+    X-Frame-Options: DENY
+    Referrer-Policy: no-referrer
+  remove_headers: [Server, X-Powered-By]
