@@ -106,6 +106,10 @@ jobs:
             mkdir -p "$work/examples/legacy-customer" "$work/examples/customer-api"
             cp examples/legacy-customer/rules.yaml examples/legacy-customer/fixture.yaml "$work/examples/legacy-customer/"
             cp examples/customer-api/adapt.yaml examples/customer-api/fixture.yaml examples/customer-api/record.yaml "$work/examples/customer-api/"
+            mkdir -p "$work/examples/vendor-app/1.0" "$work/examples/vendor-app/1.1"
+            cp examples/vendor-app/overlay.yaml examples/vendor-app/fixture.yaml "$work/examples/vendor-app/"
+            cp examples/vendor-app/1.0/config.json "$work/examples/vendor-app/1.0/"
+            cp examples/vendor-app/1.1/config.json "$work/examples/vendor-app/1.1/"
             if [ "$os" = windows ]; then
               (cd "$(dirname "$work")" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
             else
@@ -169,6 +173,8 @@ jobs:
           $PREFIX "$bin" adapt check --config examples/customer-api/adapt.yaml
           $PREFIX "$bin" adapt test --config examples/customer-api/adapt.yaml --fixture examples/customer-api/fixture.yaml
           $PREFIX "$bin" record check --config examples/customer-api/record.yaml
+          $PREFIX "$bin" config check --overlay examples/vendor-app/overlay.yaml
+          $PREFIX "$bin" config test --overlay examples/vendor-app/overlay.yaml --fixture examples/vendor-app/fixture.yaml
 
   publish:
     needs: [plan, build, smoke]

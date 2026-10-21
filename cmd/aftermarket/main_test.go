@@ -234,3 +234,45 @@ func TestRecordOnBusyPortLeavesNoFile(t *testing.T) {
 		t.Fatal("an empty fixture was left behind")
 	}
 }
+
+func TestConfigCommands(t *testing.T) {
+	ov := "../../examples/vendor-app/overlay.yaml"
+	code, out, errs := runCLI("config", "check", "--overlay", ov)
+	if code != 0 || !strings.Contains(out, "7 change(s)") || !strings.Contains(out, "set database.password to REDACTED") || !strings.HasSuffix(out, "ok\n") {
+		t.Fatalf("check: %d %q %q", code, out, errs)
+	}
+	code, out, _ = runCLI("config", "diff", "--overlay", ov)
+	if code != 0 || !strings.Contains(out, "~ server.timeout: 30 -> 120") || strings.Contains(out, "from-our-vault") {
+		t.Fatalf("diff: %d %q", code, out)
+	}
+	code, out, _ = runCLI("config", "test", "--overlay", ov, "--fixture", "../../examples/vendor-app/fixture.yaml")
+	if code != 0 || !strings.Contains(out, "3 case(s), 0 failed") {
+		t.Fatalf("test: %d %q", code, out)
+	}
+	dst := filepath.Join(t.TempDir(), "config.json")
+	code, out, _ = runCLI("config", "apply", "--overlay", ov, "--out", dst)
+	if code != 0 || !strings.Contains(out, "7 change(s) applied") {
+		t.Fatalf("apply: %d %q", code, out)
+	}
+	before, _ := os.ReadFile(dst)
+	code, _, errs = runCLI("config", "apply", "--overlay", ov, "--base", "../../examples/vendor-app/1.1/config.json", "--out", dst)
+	if code != 1 || !strings.Contains(errs, "2 of 7 change(s) can't be applied") || !strings.Contains(errs, "nothing was written") {
+		t.Fatalf("1.1: %d %q", code, errs)
+	}
+	if after, _ := os.ReadFile(dst); string(after) != string(before) {
+		t.Fatal("a failed apply changed the output")
+	}
+	if code, _, errs := runCLI("config", "apply", "--overlay", ov, "--out", "../../examples/vendor-app/1.0/config.json"); code != 1 || !strings.Contains(errs, "never writes the base") {
+		t.Fatalf("same file: %d %q", code, errs)
+	}
+	for _, args := range [][]string{{"config"}, {"config", "nope"}, {"config", "check"}, {"config", "apply", "--overlay", ov}, {"config", "test", "--overlay", ov}} {
+		if code, _, _ := runCLI(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	bad := filepath.Join(t.TempDir(), "bad.yaml")
+	os.WriteFile(bad, []byte("base: x.json\nchanges:\n  - set: {path: a}\n"), 0o600)
+	if code, _, errs := runCLI("config", "check", "--overlay", bad); code != 1 || !strings.Contains(errs, "line 3: set needs value") {
+		t.Fatalf("bad overlay: %d %q", code, errs)
+	}
+}

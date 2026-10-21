@@ -1,0 +1,20 @@
+{
+  "server": {
+    "port": 8080,
+    "timeout": 30,
+    "workers": 4
+  },
+  "logging": {
+    "level": "info",
+    "format": "text"
+  },
+  "telemetry": {
+    "enabled": true,
+    "endpoint": "https://telemetry.example.com/v1"
+  },
+  "database": {
+    "url": "postgres://app@db.internal/app",
+    "password": "vendor-default",
+    "pool": 10
+  }
+}

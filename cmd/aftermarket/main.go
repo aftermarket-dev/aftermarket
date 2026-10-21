@@ -40,12 +40,19 @@ Usage:
   aftermarket record check --config record.yaml
   aftermarket replay --fixture fixture.yaml --a URL [--b URL] [--include-writes]
 
+  aftermarket config check --overlay overlay.yaml [--base FILE]
+  aftermarket config diff  --overlay overlay.yaml [--base FILE]
+  aftermarket config apply --overlay overlay.yaml --out FILE [--base FILE]
+  aftermarket config test  --overlay overlay.yaml --fixture fixture.yaml
+
   aftermarket version
 
 patch fixes requests and responses with small rules. adapt maps old API
 endpoints onto new ones. record saves real traffic as fixtures, with
 credentials removed, and replay sends them to two versions of a service and
-reports the differences. Add -h to any command for its options.
+reports the differences. config changes a vendor's config file through an
+overlay, without ever editing the file itself. Add -h to any command for its
+options.
 Manual: https://github.com/aftermarket-dev/aftermarket
 `
 
@@ -73,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runRecord(args[1:], stdout, stderr)
 	case "replay":
 		return runReplay(args[1:], stdout, stderr)
+	case "config":
+		return runConfig(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "aftermarket: unknown command %q\n\n%s", args[0], usage)
 	return 2

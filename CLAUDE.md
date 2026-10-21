@@ -69,8 +69,19 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - Comparison: status, chosen headers (Content-Type by default), JSON bodies by meaning (key order and number formatting ignored, `--ignore` dot paths), other bodies byte for byte. Markdown and JSON reports; exit 1 on any difference.
 - Promise tests: recording changes zero bytes; no credential or listed value reaches a fixture; the customer-api suite recorded against v1 replays with no difference against v2 through adapt, and with differences against v2 directly.
 
+### 0.4.0 AfterConfig (approved Oct 21 2026)
+`aftermarket config`: overlays that change a vendor's config file without ever editing it, so upgrades can't wipe the changes.
+- Overlay file names the vendor (base) config and lists changes by dot path: set, delete, rename, copy (the same operations as AfterPatch JSON).
+- Guards: a change can say what value it expects to find (`expect`, or `expect_absent`). If an upgrade changed it, apply stops and names the line. Guards are optional per change.
+- Commands: `config check` (validate overlay against the current base, every problem listed), `config diff` (field by field, secret-looking keys shown as REDACTED), `config apply --out FILE` (atomic write), `config test` (fixtures).
+- Formats: JSON, YAML (the subset internal/yamlite reads; comments are not kept in the output) and .env. TOML later.
+- Output always goes to a separate `--out` file; apply refuses to write the base file itself.
+- Promises: the base file is never written; applying twice gives the same bytes; a failed apply leaves the old output untouched; fields the overlay doesn't name keep their order and exact value.
+- Example: a vendor app upgraded from 1.0 to 1.1, where the guard stops apply exactly where the vendor changed a default.
+- No new dependencies.
+
 ### Later, decided with the owner at the time
-AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
+AfterGuard (needs a written threat model first), AfterHook. Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
 ## Status
 
@@ -92,4 +103,5 @@ AfterGuard (needs a written threat model first), AfterHook, AfterConfig. Afterli
 
 ## Next
 
-The approved plan is done as of 0.3.0. What comes next (AfterGuard, AfterHook, AfterConfig or something else) is decided with the owner; nothing is started until then.
+1. 0.4.0 AfterConfig, as approved above.
+2. After it: AfterGuard, AfterHook or something else, decided with the owner; nothing is started until then.

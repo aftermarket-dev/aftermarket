@@ -1,0 +1,28 @@
+cases:
+  - name: the overlay applies to the 1.0 config
+    base: |
+      {"server": {"port": 8080, "timeout": 30, "workers": 4},
+       "logging": {"level": "info", "format": "text"},
+       "telemetry": {"enabled": true, "endpoint": "https://telemetry.example.com/v1"},
+       "database": {"url": "postgres://app@db.internal/app", "password": "vendor-default", "pool": 10}}
+    expect: |
+      {"server": {"port": 8080, "timeout": 120, "workers": 8, "max_body": "10MiB"},
+       "logging": {"level": "info", "format": "json"},
+       "telemetry": {"enabled": false, "endpoint": "https://telemetry.example.com/v1"},
+       "database": {"url": "postgres://app@db.internal/app", "password": "from-our-vault", "pool": 25}}
+
+  - name: an upgrade that changes the timeout default stops apply
+    base: |
+      {"server": {"port": 8080, "timeout": 60, "workers": 4},
+       "logging": {"level": "info", "format": "text"},
+       "telemetry": {"enabled": true},
+       "database": {"password": "x", "pool": 10}}
+    expect_error: "expects server.timeout to be 30, but the base has 60"
+
+  - name: a vendor that adds max_body itself stops apply
+    base: |
+      {"server": {"timeout": 30, "workers": 4, "max_body": "1MiB"},
+       "logging": {"format": "text"},
+       "telemetry": {"enabled": true},
+       "database": {"pool": 10}}
+    expect_error: "expects server.max_body to be absent"

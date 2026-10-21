@@ -1,0 +1,24 @@
+# Our changes to the vendor's config. The vendor file is never edited:
+# aftermarket config apply writes the result to a separate file.
+version: 1
+base: 1.0/config.json
+
+changes:
+  # Our reports run long. The vendor default was 30 seconds.
+  - set: {path: server.timeout, value: 120, expect: 30}
+
+  # Twice the vendor's workers for our traffic.
+  - set: {path: server.workers, value: 8, expect: 4}
+
+  # Our log pipeline reads JSON lines.
+  - set: {path: logging.format, value: json, expect: text}
+
+  # No telemetry leaves our network.
+  - set: {path: telemetry.enabled, value: false, expect: true}
+
+  # Our database password, and a bigger pool.
+  - set: {path: database.password, value: from-our-vault}
+  - set: {path: database.pool, value: 25, expect: 10}
+
+  # A setting the vendor doesn't have yet.
+  - set: {path: server.max_body, value: 10MiB, expect_absent: true}
