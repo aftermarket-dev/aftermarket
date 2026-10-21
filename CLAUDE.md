@@ -91,16 +91,16 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - No new dependencies.
 
 ### 0.6.0 AfterGuard (approved Oct 21 2026; threat model in docs/guard-threat-model.md; the three open choices left to Claude)
-: an HTTP security gateway in front of apps that can't protect themselves.
-- , ,  with fixtures.
-- Rules with the shared  block, plus client address (CIDR) and credential; actions allow, deny (with status), and limit. Default deny;  warns on an allow default.
-- Credentials: API keys and HTTP Basic, stored as SHA-256 hashes, compared in constant time; identity header set by AfterGuard, client copies removed; the credential removed before forwarding unless the config keeps it.  trusted only from listed proxies.
+`aftermarket guard`: an HTTP security gateway in front of apps that can't protect themselves.
+- `guard run --config guard.yaml --upstream URL --listen :8080 [--dry-run]`, `guard check`, `guard test` with fixtures.
+- Rules with the shared `when:` block, plus client address (CIDR) and credential; actions allow, deny (with status), and limit. Default deny; `check` warns on an allow default.
+- Credentials: API keys and HTTP Basic, stored as SHA-256 hashes, compared in constant time; identity header set by AfterGuard, client copies removed; the credential removed before forwarding unless the config keeps it. `X-Forwarded-For` trusted only from listed proxies.
 - Rate limits: token buckets per address (IPv6 per /64), key or rule; a stricter limit on failed logins; a fixed-size table.
 - Ambiguous requests (conflicting framing, encoded slash/dot/backslash, NUL, non-canonical paths, bad header bytes) rejected with 400, never cleaned up; the forwarded request is rebuilt from AfterGuard's own parse.
 - Response headers: security headers added and version headers removed, by config.
 - Limits on header size, body size, slow clients and connections. Optional TLS from certificate and key files; plain HTTP by default.
 - JSON-lines decision log with secrets redacted and denial floods summarised.
-- Promises: nothing ambiguous gets through; a denied request never reaches the app; allowed traffic passes byte for byte; limits hold and memory stays bounded; a client can't choose its identity or address; no secret reaches a log. Example .
+- Promises: nothing ambiguous gets through; a denied request never reaches the app; allowed traffic passes byte for byte; limits hold and memory stays bounded; a client can't choose its identity or address; no secret reaches a log. Example `examples/legacy-admin`.
 - Not in 0.6.0: single sign-on, attack signatures, shared limits, WebSocket inspection, automatic certificates.
 - No new dependencies.
 
