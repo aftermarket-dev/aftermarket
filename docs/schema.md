@@ -156,6 +156,7 @@ For `test` to mean something, the old and new databases must hold the same data,
 - Views serve reads. An old app that writes to a mapped table gets an error from SQLite, because views can't be written to. `check` shows which statements are affected.
 - A view can't have the same name as a table, so an old table whose name the new schema still uses for a table can't get a compatibility view. `diff` lists the changes to that table, and the mapping refuses it with a clear message.
 - One old table is read from one new table or view. When an old table is spread over several new ones, create a view in the new database that joins them and map to that.
+- A `CREATE TRIGGER` whose body has `CASE ... END;` is cut at that `END;`, as the `sqlite3` shell cuts it, so an error inside such a trigger may name the wrong line.
 - SQLite only. Other databases have different rules for views and types.
 - A database in WAL mode gets the usual `-wal` and `-shm` helper files next to it when it is read, as with any SQLite reader. The database file itself is not changed.
 - `test` compares results on the data it is given. It can't know about rows the sample doesn't hold, such as an old customer who still had a fax number.

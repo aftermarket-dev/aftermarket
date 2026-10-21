@@ -187,7 +187,7 @@ func runSchema(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "aftermarket: the views would not be safe to feed to sqlite3 (%v); nothing was written\n", err)
 			return 1
 		}
-		if stmts, err := sqlitecli.Split(sql); err != nil || len(stmts) != 2*len(views)+2 {
+		if stmts, err := sqlitecli.Split(sql); err != nil || !schema.ScriptShape(stmts, len(views)) {
 			fmt.Fprintf(stderr, "aftermarket: the views would not read back as written (%v); nothing was written\n", err)
 			return 1
 		}

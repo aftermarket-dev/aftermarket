@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.7.2
-- Recorded: 2026-10-21T21:06:53Z
+- Version: 0.8.0
+- Recorded: 2026-10-21T22:30:57Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-474 of 474 tests passed (race detector on).
+505 of 505 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -25,6 +25,10 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | cmd/aftermarket | TestRecordOnBusyPortLeavesNoFile | pass |
 | cmd/aftermarket | TestReplayCLI | pass |
 | cmd/aftermarket | TestRunNeedsUpstream | pass |
+| cmd/aftermarket | TestSchemaCommands | pass |
+| cmd/aftermarket | TestSchemaCompatApplies | pass |
+| cmd/aftermarket | TestSchemaDiffMapMustCompile | pass |
+| cmd/aftermarket | TestSchemaRefusesShellCommands | pass |
 | cmd/aftermarket | TestTestExample | pass |
 | cmd/aftermarket | TestTestFailingFixture | pass |
 | cmd/aftermarket | TestUsage | pass |
@@ -42,6 +46,8 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | examples/legacy-customer | TestFixtureFilePasses | pass |
 | examples/legacy-customer | TestOldClientNeedsTheRules | pass |
 | examples/legacy-customer | TestRemovingEitherRuleBreaksTheClient | pass |
+| examples/legacy-shop | TestLostDataIsCaught | pass |
+| examples/legacy-shop | TestOldReportsReadTheSame | pass |
 | examples/vendor-app | TestFixturePasses | pass |
 | examples/vendor-app | TestUpgradeStopsWhereTheVendorChangedSomething | pass |
 | examples/vendor-app-toml | TestFixturePasses | pass |
@@ -322,6 +328,31 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/rules | TestPathGlob | pass |
 | internal/rules | TestReportsAllErrors | pass |
 | internal/rules | TestRewriteGroupReferences | pass |
+| internal/schema | TestCheckExplainAndTriggers | pass |
+| internal/schema | TestCompareEmptyResults | pass |
+| internal/schema | TestCompareOrder | pass |
+| internal/schema | TestCompareWholeValues | pass |
+| internal/schema | TestDatabasesAreNeverWritten | pass |
+| internal/schema | TestDiffDetails | pass |
+| internal/schema | TestDiffMarksWhatBreaks | pass |
+| internal/schema | TestMapErrorsAreListed | pass |
+| internal/schema | TestMapFragments | pass |
+| internal/schema | TestMapNameStaysInTheComment | pass |
+| internal/schema | TestPlanProblems | pass |
+| internal/schema | TestRandomRenamesReadTheSame | pass |
+| internal/schema | TestReadsAndOrder | pass |
+| internal/schema | TestSQLIsStable | pass |
+| internal/schema | TestVerifyFindsBadExpressions | pass |
+| internal/sqlitecli | TestErrorLinesPointIntoTheFile | pass |
+| internal/sqlitecli | TestErrorsNameTheirPart | pass |
+| internal/sqlitecli | TestExactIsExact | pass |
+| internal/sqlitecli | TestMissingProgram | pass |
+| internal/sqlitecli | TestNeverWrites | pass |
+| internal/sqlitecli | TestNewEnough | pass |
+| internal/sqlitecli | TestNothingIsWrittenThroughTheShell | pass |
+| internal/sqlitecli | TestQueryKeepsOrderAndRepeatedNames | pass |
+| internal/sqlitecli | TestShellCommandsAreRefused | pass |
+| internal/sqlitecli | TestSplit | pass |
 | internal/yamlite | TestLineNumbers | pass |
 | internal/yamlite | TestParseErrors | pass |
 | internal/yamlite | TestParseValid | pass |
@@ -332,17 +363,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 57.5 µs | 313.7 µs | 29359 |
-| proxy, no rule matches | 135.7 µs | 1003.9 µs | 7218 |
-| proxy, both example rules applied | 190.3 µs | 1817.1 µs | 7043 |
-| adapt: direct to v2, one customer | 47.3 µs | 378.3 µs | 23059 |
-| adapt: v1 lookup rebuilt from v2 | 194.3 µs | 2296.6 µs | 4847 |
-| adapt: direct to v2, list | 45.0 µs | 331.0 µs | 20915 |
-| adapt: v1 list rebuilt from v2 | 259.8 µs | 2282.1 µs | 4413 |
-| record: v2 lookup saved to a fixture | 230.9 µs | 1659.5 µs | 5543 |
+| direct to upstream | 58.9 µs | 312.9 µs | 23712 |
+| proxy, no rule matches | 154.9 µs | 1153.9 µs | 5924 |
+| proxy, both example rules applied | 216.9 µs | 2110.6 µs | 5296 |
+| adapt: direct to v2, one customer | 55.0 µs | 378.6 µs | 19636 |
+| adapt: v1 lookup rebuilt from v2 | 206.9 µs | 2254.6 µs | 5928 |
+| adapt: direct to v2, list | 43.8 µs | 293.8 µs | 23321 |
+| adapt: v1 list rebuilt from v2 | 234.0 µs | 2210.8 µs | 4580 |
+| record: v2 lookup saved to a fixture | 221.1 µs | 1708.9 µs | 5746 |
 
-Added by the proxy when no rule matches: 78.2 µs at p50, 690.2 µs at p99.
-Added by the proxy with both example rules applied: 132.8 µs at p50, 1503.4 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 147.0 µs at p50, 1918.3 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 214.8 µs at p50, 1951.1 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 183.6 µs at p50, 1281.2 µs at p99.
+Added by the proxy when no rule matches: 96.0 µs at p50, 841.0 µs at p99.
+Added by the proxy with both example rules applied: 158.0 µs at p50, 1797.7 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 151.9 µs at p50, 1876.0 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 190.2 µs at p50, 1917.0 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 166.1 µs at p50, 1330.3 µs at p99.

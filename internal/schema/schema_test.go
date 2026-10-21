@@ -501,3 +501,26 @@ CREATE VIRTUAL TABLE docs USING fts5(body);`)
 		t.Fatalf("the virtual table's hidden columns were kept: %+v", d)
 	}
 }
+
+// The mapping's file name goes into a comment in compat.sql; a line break
+// in it must not end the comment. From the third 0.8.0 review.
+func TestMapNameStaysInTheComment(t *testing.T) {
+	r := runner(t)
+	old := read(t, r, "CREATE TABLE c (a);")
+	nw := read(t, r, "CREATE TABLE n (a);")
+	m, _ := ParseMap([]byte("version: 1\nold: o\nviews:\n  - old: c\n    from: n\n"), ".")
+	views, probs := m.Plan(old, nw)
+	if len(probs) != 0 {
+		t.Fatal(probs)
+	}
+	sql := SQL(views, "m\nDELETE FROM accounts AS\n--", false)
+	stmts := mustSplit(t, sql)
+	if !ScriptShape(stmts, 1) || strings.Contains(sql, "\nDELETE") {
+		t.Fatalf("%s", sql)
+	}
+	// A script with something else in place of BEGIN is refused.
+	bad := mustSplit(t, "DELETE FROM accounts AS BEGIN;\nDROP VIEW IF EXISTS c;\nCREATE VIEW c AS SELECT 1;\nCOMMIT;")
+	if ScriptShape(bad, 1) {
+		t.Fatal("a script with a DELETE passed")
+	}
+}

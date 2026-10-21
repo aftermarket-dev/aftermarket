@@ -116,7 +116,7 @@ func Verify(ctx context.Context, r *sqlitecli.Runner, newSrc sqlitecli.Source, v
 func SQL(views []Planned, mapName string, temp bool) string {
 	var b strings.Builder
 	if !temp {
-		fmt.Fprintf(&b, "-- Compatibility views from %s, written by aftermarket schema compat.\n", mapName)
+		fmt.Fprintf(&b, "-- Compatibility views from %s, written by aftermarket schema compat.\n", printable(mapName))
 		b.WriteString("-- They show the old tables, read from the new schema, for old queries that read.\n")
 		b.WriteString("-- Review them, then apply to the new database, for example: sqlite3 new.db < compat.sql\n\n")
 		b.WriteString("BEGIN;\n")
@@ -192,4 +192,45 @@ func Cover(changes []Change, views []Planned) []Change {
 		}
 	}
 	return out
+}
+
+// printable keeps a name on one comment line: control characters, which
+// could end the comment, become "?".
+func printable(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029 {
+			return '?'
+		}
+		return r
+	}, name)
+}
+
+// ScriptShape reports whether a compatibility script reads back as exactly
+// what SQL writes: BEGIN, then DROP VIEW IF EXISTS and CREATE VIEW for each
+// view, then COMMIT.
+func ScriptShape(stmts []Stmt, views int) bool {
+	if len(stmts) != 2*views+2 {
+		return false
+	}
+	starts := func(sql string, words ...string) bool {
+		got := strings.Fields(sql)
+		if len(got) < len(words) {
+			return false
+		}
+		for i, w := range words {
+			if !strings.EqualFold(got[i], w) {
+				return false
+			}
+		}
+		return true
+	}
+	if strings.TrimSpace(stmts[0].SQL) != "BEGIN" || strings.TrimSpace(stmts[len(stmts)-1].SQL) != "COMMIT" {
+		return false
+	}
+	for i := 0; i < views; i++ {
+		if !starts(stmts[1+2*i].SQL, "DROP", "VIEW", "IF", "EXISTS") || !starts(stmts[2+2*i].SQL, "CREATE", "VIEW") {
+			return false
+		}
+	}
+	return true
 }
