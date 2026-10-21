@@ -1,0 +1,22 @@
+# How Shop 1.0's tables look in terms of Shop 2.0. Each column is an SQL
+# expression over the new table; old columns not listed keep their name.
+version: 1
+old: v1/shop.sql
+new: v2/shop.sql
+
+views:
+  - old: customers
+    from: accounts
+    columns:
+      name: first_name || ' ' || last_name
+      fax: null                  # 2.0 dropped fax
+      created: created_at
+    where: deleted_at IS NULL    # 2.0 keeps deleted accounts; 1.0 removed them
+
+  - old: orders
+    from: purchases
+    columns:
+      customer_id: account_id
+      total: total_cents / 100.0 # 2.0 keeps whole cents
+      status: state
+      placed: placed_at

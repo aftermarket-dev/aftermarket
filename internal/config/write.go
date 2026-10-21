@@ -24,6 +24,17 @@ func WriteOut(base, out string, data []byte) error {
 	if fi, err := os.Stat(base); err == nil {
 		mode = fi.Mode().Perm()
 	}
+	return WriteFile(out, data, mode)
+}
+
+// SameFile reports whether a and b name the same file, through links and
+// different spellings of the path, whether or not b exists yet.
+func SameFile(a, b string) bool { return sameFile(a, b) }
+
+// WriteFile writes data to out in one step: a temporary file in the same
+// folder, then a rename, so a reader never sees half of it and a failure
+// leaves the old file as it was.
+func WriteFile(out string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(out)
 	tmp, err := os.CreateTemp(dir, ".aftermarket-config-*")
 	if err != nil {

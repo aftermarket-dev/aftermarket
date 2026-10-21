@@ -54,6 +54,11 @@ Usage:
   aftermarket guard test  --config guard.yaml --fixture fixture.yaml
   aftermarket guard hash  < key.txt
 
+  aftermarket schema diff   --old A --new B [--map map.yaml] [--json]
+  aftermarket schema compat --map map.yaml --out compat.sql [--new B]
+  aftermarket schema check  --queries old.sql [--map map.yaml] [--new B]
+  aftermarket schema test   --map map.yaml --queries old.sql [--old A] [--new B]
+
   aftermarket version
 
 patch fixes requests and responses with small rules. adapt maps old API
@@ -63,7 +68,8 @@ reports the differences. config changes a vendor's config file through an
 overlay, without ever editing the file itself. hook watches files, folders,
 HTTP endpoints and command output, and sends a signed webhook for each
 change. guard stands in front of an app that can't protect itself, and turns
-away requests that break its rules. Add -h to any command for its options.
+away requests that break its rules. schema compares SQLite schemas and writes
+views that keep old queries working after a schema change. Add -h to any command for its options.
 Manual: https://github.com/aftermarket-dev/aftermarket
 `
 
@@ -95,6 +101,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runConfig(args[1:], stdout, stderr)
 	case "hook":
 		return runHook(args[1:], stdout, stderr)
+	case "schema":
+		return runSchema(args[1:], stdout, stderr)
 	case "guard":
 		return runGuard(args[1:], stdout, stderr)
 	}

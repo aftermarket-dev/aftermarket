@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -351,4 +352,90 @@ func TestGuardCommands(t *testing.T) {
 	if code, _, errs := runCLI("guard", "hash"); code != 0 || !strings.Contains(errs, "can be guessed") {
 		t.Fatalf("short key: %d %q", code, errs)
 	}
+}
+
+func TestSchemaCommands(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil && os.Getenv("AFTERMARKET_SQLITE3") == "" {
+		t.Skip("sqlite3 is not installed")
+	}
+	dir := "../../examples/legacy-shop"
+	mp := filepath.Join(dir, "map.yaml")
+	q := filepath.Join(dir, "reports.sql")
+	v1, v2 := filepath.Join(dir, "v1", "shop.sql"), filepath.Join(dir, "v2", "shop.sql")
+
+	code, out, _ := runCLI("schema", "diff", "--old", v1, "--new", v2)
+	if code != 1 || !strings.Contains(out, ", 2 breaking") || !strings.Contains(out, "breaking  table customers removed") {
+		t.Fatalf("diff: %d %q", code, out)
+	}
+	code, out, _ = runCLI("schema", "diff", "--map", mp)
+	if code != 0 || !strings.Contains(out, ", 0 breaking") || !strings.Contains(out, "covered   table customers removed") {
+		t.Fatalf("diff with the map: %d %q", code, out)
+	}
+	if code, out, _ = runCLI("schema", "diff", "--map", mp, "--json"); code != 0 || !strings.Contains(out, `"breaking": 0`) {
+		t.Fatalf("diff json: %d %q", code, out)
+	}
+	code, out, _ = runCLI("schema", "check", "--queries", q, "--new", v2)
+	if code != 1 || !strings.Contains(out, "1 of 12 queries compile") {
+		t.Fatalf("check without the map: %d %q", code, out)
+	}
+	code, out, _ = runCLI("schema", "check", "--queries", q, "--map", mp)
+	if code != 0 || !strings.Contains(out, "12 of 12 queries compile") {
+		t.Fatalf("check: %d %q", code, out)
+	}
+	code, out, _ = runCLI("schema", "test", "--queries", q, "--map", mp)
+	if code != 0 || !strings.Contains(out, "12 of 12 reads give the same rows") {
+		t.Fatalf("test: %d %q", code, out)
+	}
+	dst := filepath.Join(t.TempDir(), "compat.sql")
+	if code, out, _ = runCLI("schema", "compat", "--map", mp, "--out", dst); code != 0 || !strings.Contains(out, "2 view(s): customers, orders") {
+		t.Fatalf("compat: %d %q", code, out)
+	}
+	got, _ := os.ReadFile(dst)
+	want, _ := os.ReadFile(filepath.Join(dir, "compat.sql"))
+	if string(got) != string(want) {
+		t.Fatalf("compat.sql differs from the committed one:\n%s", got)
+	}
+	inputs := map[string]string{}
+	for _, f := range []string{mp, q, v1, v2} {
+		b, _ := os.ReadFile(f)
+		inputs[f] = string(b)
+	}
+	for _, in := range []string{v2, mp, v1} {
+		if code, _, errs := runCLI("schema", "compat", "--map", mp, "--out", in); code != 1 || !strings.Contains(errs, "never writes its inputs") {
+			t.Fatalf("--out %s: %d %q", in, code, errs)
+		}
+	}
+	for f, b := range inputs {
+		if after, _ := os.ReadFile(f); string(after) != b {
+			t.Fatalf("%s changed", f)
+		}
+	}
+	// A failing read names the line and the difference.
+	broken := filepath.Join(t.TempDir(), "map.yaml")
+	data := strings.ReplaceAll(string(inputs[mp]), "total_cents / 100.0", "total_cents / 100")
+	data = strings.ReplaceAll(data, "old: v1/shop.sql", "old: "+filepath.Join(mustAbs(t, dir), "v1/shop.sql"))
+	data = strings.ReplaceAll(data, "new: v2/shop.sql", "new: "+filepath.Join(mustAbs(t, dir), "v2/shop.sql"))
+	os.WriteFile(broken, []byte(data), 0o600)
+	if code, out, _ = runCLI("schema", "test", "--queries", q, "--map", broken); code != 1 || !strings.Contains(out, "FAIL  line") || !strings.Contains(out, "differs") {
+		t.Fatalf("broken map: %d %q", code, out)
+	}
+	for _, args := range [][]string{{"schema"}, {"schema", "nope"}, {"schema", "diff"}, {"schema", "compat", "--map", mp}, {"schema", "check"}, {"schema", "test", "--map", mp}} {
+		if code, _, _ := runCLI(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	bad := filepath.Join(t.TempDir(), "bad.yaml")
+	os.WriteFile(bad, []byte("version: 1\nviews:\n  - from: x\n"), 0o600)
+	if code, _, errs := runCLI("schema", "diff", "--map", bad); code != 1 || !strings.Contains(errs, "old is required") {
+		t.Fatalf("bad map: %d %q", code, errs)
+	}
+}
+
+func mustAbs(t *testing.T, p string) string {
+	t.Helper()
+	a, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }

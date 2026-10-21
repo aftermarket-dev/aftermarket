@@ -8,16 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/aftermarket-dev/aftermarket/internal/proc"
 	"io"
 	"io/fs"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/config"
 	"github.com/aftermarket-dev/aftermarket/internal/ojson"
@@ -278,52 +277,20 @@ func (h *Hook) lookHTTP(ctx context.Context, s *Source) (Snapshot, error) {
 }
 
 func (h *Hook) lookCommand(ctx context.Context, s *Source) (Snapshot, error) {
-	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, s.Run[0], s.Run[1:]...)
-	cmd.Dir = s.Dir
-	// A child that keeps stdout open must not hold the check past its
-	// timeout: the whole process group is killed, and the wait gives up.
-	ownGroup(cmd)
-	cmd.WaitDelay = time.Second
-	var out bytes.Buffer
-	cmd.Stdout = &limitWriter{w: &out, n: h.cfg.MaxBody}
-	err := cmd.Run()
-	if ctx.Err() != nil || errors.Is(err, exec.ErrWaitDelay) {
+	res, err := proc.Run(ctx, proc.Spec{Args: s.Run, Dir: s.Dir, Timeout: s.Timeout, MaxOut: h.cfg.MaxBody})
+	switch {
+	case errors.Is(err, proc.ErrTimeout):
 		return Snapshot{}, errors.New("the command did not finish within its timeout")
-	}
-	var exit *exec.ExitError
-	if errors.As(err, &exit) {
-		// A failing command tells us nothing about the data; try again later.
-		return Snapshot{}, fmt.Errorf("the command exited with status %d", exit.ExitCode())
-	}
-	if err != nil {
-		return Snapshot{}, errors.New("the command could not be started")
-	}
-	if int64(out.Len()) > h.cfg.MaxBody {
+	case errors.Is(err, proc.ErrTooMuch):
 		return Snapshot{}, errTooBig
+	case err != nil:
+		return Snapshot{}, errors.New("the command could not be started")
+	case res.ExitCode != 0:
+		// A failing command tells us nothing about the data; try again later.
+		return Snapshot{}, fmt.Errorf("the command exited with status %d", res.ExitCode)
 	}
-	b := out.Bytes()
+	b := res.Stdout
 	return Snapshot{Exists: true, Hash: hashOf(b), Size: int64(len(b)), Content: string(b)}, nil
-}
-
-type limitWriter struct {
-	w io.Writer
-	n int64
-}
-
-func (l *limitWriter) Write(p []byte) (int, error) {
-	if l.n < 0 {
-		return len(p), nil
-	}
-	if int64(len(p)) > l.n {
-		// One byte past the limit, so the caller sees it was exceeded.
-		l.w.Write(p[:l.n+1])
-		l.n = -1
-		return len(p), nil
-	}
-	l.n -= int64(len(p))
-	return l.w.Write(p)
 }
 
 // diff lists the changes between two snapshots of s. No changes means the
