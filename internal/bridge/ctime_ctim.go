@@ -1,3 +1,5 @@
+//go:build linux || openbsd
+
 package bridge
 
 import "syscall"

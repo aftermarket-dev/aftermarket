@@ -1,4 +1,4 @@
-//go:build darwin || freebsd || netbsd || openbsd
+//go:build darwin || freebsd || netbsd
 
 package bridge
 

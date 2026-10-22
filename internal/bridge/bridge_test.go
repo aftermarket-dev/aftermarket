@@ -866,3 +866,32 @@ func TestSameSizeAndTimeReplacement(t *testing.T) {
 		t.Fatalf("%s", b)
 	}
 }
+
+// From the second 0.9.0 review: a CSV number column refuses a whole
+// number a float can't hold, and a dump whose last statement has no ;
+// is refused.
+func TestSecondReviewCases(t *testing.T) {
+	cfg := "version: 1\nsources:\n  - id: o\n    csv: {file: o.csv}\n    columns: {n: number}\nendpoints:\n  - path: /o\n    source: o\n"
+	c, _ := setup(t, cfg, map[string]string{"o.csv": "n\n9007199254740993\n"})
+	s, _ := serve(t, c, nil)
+	if code, _, _ := get(s, "GET", "/o"); code != 503 {
+		t.Fatal("a big whole number was rounded")
+	}
+	c, _ = setup(t, cfg, map[string]string{"o.csv": "n\n9007199254740992\n"})
+	s, _ = serve(t, c, nil)
+	if code, _, b := get(s, "GET", "/o"); code != 200 || !strings.Contains(b, "9.007199254740992e+15") {
+		t.Fatalf("2^53 itself fits: %d %s", code, b)
+	}
+	r := needSQLite(t)
+	dcfg := "version: 1\nsources:\n  - id: t\n    sqlite: {db: d.sql, table: t}\nendpoints:\n  - path: /t\n    source: t\n"
+	c, _ = setup(t, dcfg, map[string]string{"d.sql": "CREATE TABLE t(k, v);\nINSERT INTO t VALUES\n(1,'a'),\n(2,'b')\n"})
+	s, log := serve(t, c, r)
+	if code, _, _ := get(s, "GET", "/t"); code != 503 || !strings.Contains(log.String(), "doesn't end with ;") {
+		t.Fatalf("%d %s", code, log.String())
+	}
+	c, _ = setup(t, dcfg, map[string]string{"d.sql": "CREATE TABLE t(k, v);\nINSERT INTO t VALUES (1,'a');\n-- the end\n"})
+	s, _ = serve(t, c, r)
+	if code, _, _ := get(s, "GET", "/t"); code != 200 {
+		t.Fatal("a trailing comment was refused")
+	}
+}

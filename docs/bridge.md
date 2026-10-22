@@ -20,9 +20,9 @@ version: 1
 
 limits:                     # all optional
   max_rows: 100000          # a source with more rows is refused
-  max_file: 64MiB           # a CSV file bigger than this is refused
+  max_file: 64MiB           # a CSV file or dump bigger than this is refused
   check_every: 2s           # how often sources are checked for changes
-  settle: 2s                # how long a CSV file must be left alone before it is read
+  settle: 2s                # how long a CSV file or dump must be left alone before it is read
   page_size: 100            # default limit for lists
   max_page_size: 1000       # largest limit a request may ask for
 
@@ -80,7 +80,7 @@ Paths in the file are relative to the config file's folder.
 | `columns` | Declared types: `text`, `integer`, `number`, `boolean` or `date`. |
 | `exclude` | Columns never read into the snapshot or served. |
 
-A CSV file has a header row. Columns not listed under `columns` are text. A line break inside a quoted value is served as `\n`, whether the file wrote `\r\n` or `\n` (Go's CSV reader reads both the same). In a declared column, an empty value is `null`; `integer` is an optional sign and digits; `number` is written in decimal, with an optional point and exponent (`0x10`, `1_000`, `Inf` and numbers too big for a float or too small to tell from zero are refused, not changed); `boolean` reads `true`, `false`, `yes`, `no`, `1` and `0`; `date` must be `YYYY-MM-DD` and a real day. A value that doesn't fit its type refuses the whole file, with the line and column, and never the value itself.
+A CSV file has a header row. Columns not listed under `columns` are text. A line break inside a quoted value is served as `\n`, whether the file wrote `\r\n` or `\n` (Go's CSV reader reads both the same). In a declared column, an empty value is `null`; `integer` is an optional sign and digits; `number` is written in decimal, with an optional point and exponent (`0x10`, `1_000`, `Inf` and numbers too big for a float, too small to tell from zero, or whole numbers above 2^53 are refused, not changed; declare such a column `integer`); `boolean` reads `true`, `false`, `yes`, `no`, `1` and `0`; `date` must be `YYYY-MM-DD` and a real day. A value that doesn't fit its type refuses the whole file, with the line and column, and never the value itself.
 
 A SQLite column keeps the type SQLite stored: integers as integers, reals as numbers with every digit kept, text as strings, NULL as `null`. A declared type is checked: `integer` must hold integers, `number` takes integers and reals (but not a whole number above 2^53, which a float can't hold exactly; declare that column `integer`), `boolean` must hold 0 or 1, `date` must be text in `YYYY-MM-DD`. Text that isn't valid UTF-8 is refused. A blob can't go into JSON, so a source with one is refused; exclude the column.
 
@@ -123,7 +123,7 @@ Numbers keep their type: a `number` that happens to be whole is written `15.0`, 
 | 405 | Anything but GET and HEAD, with `Allow: GET, HEAD`. |
 | 503 | The source hasn't been read yet, with `Retry-After`. |
 
-Errors are JSON, `{"error": "..."}`. Every answer has `Content-Length`. HEAD gets the same headers without the body. `GET /_aftermarket/healthz` answers `200 ok`.
+Errors are JSON, `{"error": "..."}`. Every answer has `Content-Length`. HEAD gets the same headers without the body. `GET /_aftermarket/healthz` answers `200 ok` as soon as the server is listening, before any source is read; an endpoint's 503 says when its source isn't ready.
 
 ## When files change
 
@@ -137,7 +137,7 @@ A CSV file or a `.sql` dump is read only once it has been left alone for `settle
 - a value doesn't fit its column's type, a key is missing or repeated, or a column the config uses is gone;
 - it isn't valid UTF-8, or is over `max_file` or `max_rows`.
 
-A `.sql` dump is refused when it doesn't end with a line break or starts a transaction it never commits, as a dump from `sqlite3 .dump` cut off partway would.
+A `.sql` dump is refused when it doesn't end with a line break, when its last statement doesn't end with `;`, or when it starts a transaction it never commits, as a dump from `sqlite3 .dump` cut off partway would.
 
 Each problem is logged once. `bridge serve` answers from the start; a source that hasn't been read yet, because it is still settling or can't be read, answers 503 until it can be.
 
@@ -189,5 +189,5 @@ cases:
 - Reads only: no writes, no authentication. Put [AfterGuard](guard.md) in front for logins and rate limits.
 - One source per endpoint; no joins across sources.
 - CSV and SQLite only; no XML, fixed-width files or other databases.
-- A whole source is held in memory, up to `max_rows` rows. A SQLite source is also limited by how much `sqlite3` may print in one read, 64 MiB, which comes to less table data than that.
+- A whole source is held in memory, up to `max_rows` rows. A SQLite source is read in one go, and `sqlite3` may print about twice `max_file` for it, so its text comes to at most about `max_file` bytes.
 - Filters are exact matches; no ranges, sorting or search.

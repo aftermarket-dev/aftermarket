@@ -51,7 +51,10 @@ type Server struct {
 }
 
 // New returns a server with nothing loaded yet.
+// It lets sqlite3 print enough for a table of max_file bytes of text,
+// which is read as hex (two characters a byte).
 func New(cfg *Config, r *sqlitecli.Runner, log *audit.Log) *Server {
+	FitRunner(cfg, r)
 	s := &Server{cfg: cfg, runner: r, log: log, states: map[*Source]*state{}}
 	for _, src := range cfg.Sources {
 		s.states[src] = &state{}
@@ -112,6 +115,9 @@ func (s *Server) load(ctx context.Context, src *Source, now bool) error {
 	}
 	if errors.Is(err, ErrNotSettled) {
 		return err // read on a later check, once it has settled
+	}
+	if err != nil && ctx.Err() != nil {
+		return err // shutting down
 	}
 	if err != nil {
 		if key := fp + "|" + err.Error(); key != st.failed {
@@ -412,4 +418,12 @@ func writeJSON(w http.ResponseWriter, r *http.Request, status int, body []byte) 
 func writeError(w http.ResponseWriter, r *http.Request, status int, msg string) int {
 	b, _ := json.Marshal(map[string]string{"error": msg})
 	return writeJSON(w, r, status, append(b, '\n'))
+}
+
+// FitRunner raises how much sqlite3 may print to fit a source of max_file
+// bytes of text, read as hex.
+func FitRunner(cfg *Config, r *sqlitecli.Runner) {
+	if r != nil && r.MaxOut < 2*cfg.MaxFile+(1<<20) {
+		r.MaxOut = 2*cfg.MaxFile + (1 << 20)
+	}
 }

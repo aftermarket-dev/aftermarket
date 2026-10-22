@@ -72,6 +72,7 @@ func runBridge(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	r := sqlitecli.New()
+	bridge.FitRunner(cfg, r)
 	needSQLite := false
 	for _, s := range cfg.Sources {
 		if !s.IsCSV() {

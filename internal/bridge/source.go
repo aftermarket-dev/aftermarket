@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aftermarket-dev/aftermarket/internal/proc"
 	"github.com/aftermarket-dev/aftermarket/internal/schema"
 	"github.com/aftermarket-dev/aftermarket/internal/sqlitecli"
 )
@@ -81,6 +82,14 @@ func parseNumber(v string) (float64, bool) {
 	f, err := strconv.ParseFloat(v, 64)
 	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
 		return 0, false
+	}
+	// A whole number a float can't hold exactly (above 2^53) would be
+	// changed, so it is refused; declare the column integer instead.
+	if !strings.ContainsAny(v, ".eE") {
+		i, ok := parseInt(v)
+		if !ok || float64(i) >= 1<<63 || int64(float64(i)) != i {
+			return 0, false
+		}
 	}
 	if f == 0 && strings.ContainsAny(strings.SplitN(strings.ToLower(v), "e", 2)[0], "123456789") {
 		return 0, false
@@ -343,7 +352,19 @@ func checkDump(path string, max int64) error {
 		return fmt.Errorf("the file is over max_file (%d bytes)", max)
 	}
 	if len(data) == 0 || data[len(data)-1] != '\n' {
-		return errors.New("the dump doesn't end with a line break; it is still being written")
+		return errors.New("the dump doesn't end with a line break, so it may have been cut off (add one if the file is complete)")
+	}
+	toks, err := sqlitecli.Lex(string(data))
+	if err != nil {
+		return err
+	}
+	for i := len(toks) - 1; i >= 0; i-- {
+		if toks[i].Significant() {
+			if toks[i].Kind != sqlitecli.Semi {
+				return errors.New("the dump's last statement doesn't end with ;, so it may have been cut off")
+			}
+			break
+		}
 	}
 	stmts, err := sqlitecli.Split(string(data))
 	if err != nil {
@@ -611,6 +632,9 @@ func (c *Config) readSQLite(ctx context.Context, r *sqlitecli.Runner, s *Source)
 	}
 	data := fmt.Sprintf("SELECT json_array(%s) AS r FROM %s LIMIT %d", strings.Join(parts, ", "), from, c.MaxRows+1)
 	out, err := r.Query(ctx, src, setup, data)
+	if errors.Is(err, proc.ErrTooMuch) {
+		return nil, fmt.Errorf("the source is too big to read in one go (over about %d bytes of text)", r.MaxOut/2)
+	}
 	if err != nil {
 		return nil, sqlMessage(err)
 	}
