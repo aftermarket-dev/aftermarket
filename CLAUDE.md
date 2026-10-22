@@ -121,6 +121,18 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - Not in 0.8.0: writes through the views, an apply step, PostgreSQL and MySQL, guessed renames, scanning app code.
 - Release smoke runs the schema commands where sqlite3 is present (Linux, macOS).
 
+### 0.9.0 AfterBridge (approved Oct 22 2026; written out from the approved summary, details left to Claude)
+`aftermarket bridge`: a read-only JSON API over an old app's CSV exports and SQLite files, for software that only hands its data over as files.
+- Sources: a CSV file, or the newest file in a folder matching a pattern (exports by date); a SQLite table or a fixed query, read through the shared sqlitecli runner, read-only, in safe mode. No values from requests ever go into SQL.
+- Each source is read into a snapshot held in memory, typed by declared columns (text, integer, number, boolean, date); it is read again when the file changes. A file that is half written, unreadable or over its limits is never served: the last good snapshot stays, and the problem is logged. A source never loaded answers 503.
+- Endpoints in `bridge.yaml`: a list (`/orders`, with `limit` and `offset` and exact-match filters on declared fields) and one item by key (`/orders/{id}`, 404 when missing). Columns can be renamed and left out. GET and HEAD only; anything else 405; unknown query parameters 400.
+- Commands: `bridge serve --config bridge.yaml [--listen ADDR]`, `bridge check` (config and sources, every problem listed), `bridge convert --source NAME --out FILE` (one typed snapshot written to JSON, atomically, never over an input), `bridge test` (the existing fixture format: request in, expected response out).
+- Same plumbing as the other tools: health check at /_aftermarket/healthz, JSON-lines access log without query values, error answers with Content-Length.
+- Promises: sources are never written; a half-written file is never served; every answer matches the snapshot it came from, values and types alike; requests can't reach SQL or files outside the config.
+- Example `examples/legacy-exports`: an old app's daily orders CSV exports and its SQLite inventory, served as `/orders`, `/orders/{id}` and `/products/{sku}`.
+- Not in 0.9.0: writes, authentication (put AfterGuard in front), joins across sources, XML or fixed-width files, other databases.
+- No new dependencies.
+
 ### Later, decided with the owner at the time
 Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
@@ -175,4 +187,4 @@ Afterlife and AfterTrace stay research; Afterlife only ever replaces documented 
 
 ## Next
 
-1. AfterBridge: a plan for 0.9.0 (a read-only JSON API over an old app's CSV exports and SQLite files, with `bridge serve|check|convert|test`) is with the owner for approval; nothing is started until then.
+1. 0.9.0 AfterBridge, as above (approved Oct 22 2026).
