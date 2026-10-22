@@ -265,10 +265,12 @@ jobs:
             if $PREFIX "../../$bin" bridge convert --config orders-only.yaml --source orders --out exports/orders-2026-10-21.csv; then exit 1; fi
             $PREFIX "../../$bin" bridge serve --config orders-only.yaml --listen 127.0.0.1:18081 --log ../../bridge.log &
             bpid=$!
-            for i in $(seq 1 50); do
-              curl -s -o /dev/null http://127.0.0.1:18081/_aftermarket/healthz && break
+            # Health answers at once; the orders answer once they are read.
+            for i in $(seq 1 100); do
+              [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/orders/1003)" = 200 ] && break
               sleep 0.2
             done
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/_aftermarket/healthz)" = 200 ]
             curl -s 'http://127.0.0.1:18081/orders?paid=false' | grep -q '"id":1004'
             [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/orders/1003)" = 200 ]
             [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/orders/9999)" = 404 ]
