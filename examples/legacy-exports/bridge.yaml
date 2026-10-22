@@ -1,0 +1,42 @@
+# The legacy app writes a CSV export of its orders every night and keeps
+# its stock in SQLite. AfterBridge serves both as a read-only JSON API.
+version: 1
+
+sources:
+  - id: orders
+    csv:
+      folder: exports
+      pattern: "orders-*.csv"   # the last by name, so the newest day
+    key: id
+    columns:
+      id: integer
+      total: number
+      paid: boolean
+      placed: date
+    exclude: [internal_note]
+
+  - id: products
+    sqlite:
+      db: inventory.sql
+      table: products
+    key: sku
+    columns:
+      price: number
+      stock: integer
+      discontinued: boolean
+    exclude: [photo]
+
+endpoints:
+  - path: /orders
+    source: orders
+    filters: [paid, placed]
+  - path: /orders/{id}
+    source: orders
+  - path: /products/{sku}
+    source: products
+    fields:
+      sku: sku
+      title: name
+      price: price
+      in_stock: stock
+      discontinued: discontinued

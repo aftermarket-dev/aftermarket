@@ -1,0 +1,67 @@
+# Run with:
+#   aftermarket bridge test --config bridge.yaml --fixture fixture.yaml
+# Requests go to the bridge, which answers from the example's own files.
+
+cases:
+  - name: the newest export is served
+    request:
+      path: /orders?limit=2
+    expect:
+      response:
+        status: 200
+        headers: {Content-Type: application/json; charset=utf-8}
+        body: '{"items":[{"id":1001,"customer":"Ada Lovelace","total":39.8,"paid":true,"placed":"2026-10-19"},{"id":1002,"customer":"Charles Babbage","total":15.25,"paid":true,"placed":"2026-10-20"}],"total":4,"limit":2,"offset":0}'
+
+  - name: unpaid orders, by filter
+    request:
+      path: /orders?paid=false
+    expect:
+      response:
+        status: 200
+        body: '{"items":[{"id":1004,"customer":"Turing, Alan","total":8.5,"paid":false,"placed":"2026-10-21"}],"total":1,"limit":100,"offset":0}'
+
+  - name: one order by id, without the internal note
+    request:
+      path: /orders/1003
+    expect:
+      response:
+        status: 200
+        body: '{"id":1003,"customer":"Grace Hopper","total":249.99,"paid":true,"placed":"2026-10-21"}'
+
+  - name: an order that isn't there
+    request:
+      path: /orders/9999
+    expect:
+      response:
+        status: 404
+
+  - name: a product from SQLite, renamed fields, no photo
+    request:
+      path: /products/BK-002
+    expect:
+      response:
+        status: 200
+        body: '{"sku":"BK-002","title":"COBOL for Beginners","price":19.99,"in_stock":0,"discontinued":true}'
+
+  - name: a filter that can't be a boolean
+    request:
+      path: /orders?paid=maybe
+    expect:
+      response:
+        status: 400
+
+  - name: a query parameter the config doesn't list
+    request:
+      path: /orders?customer=Ada%20Lovelace
+    expect:
+      response:
+        status: 400
+
+  - name: writes are refused
+    request:
+      method: DELETE
+      path: /orders/1001
+    expect:
+      response:
+        status: 405
+        headers: {Allow: "GET, HEAD"}
