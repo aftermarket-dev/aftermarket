@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -32,11 +33,10 @@ const HealthPath = "/_aftermarket/healthz"
 
 // state is what the server knows about one source.
 type state struct {
-	snap    atomic.Pointer[Snapshot]
-	mu      sync.Mutex
-	loaded  string // fingerprint of the snapshot being served
-	pending string // a changed fingerprint seen once, waiting to hold still
-	failed  string // fingerprint that last failed, so it is logged once
+	snap   atomic.Pointer[Snapshot]
+	mu     sync.Mutex
+	loaded string // fingerprint of the snapshot being served
+	failed string // fingerprint and problem last logged, so it is logged once
 }
 
 // Server answers requests from the snapshots.
@@ -46,13 +46,11 @@ type Server struct {
 	log    *audit.Log
 	states map[*Source]*state
 	reqID  atomic.Uint64
-	// Settle is how long a file must hold still after it is read.
-	Settle time.Duration
 }
 
 // New returns a server with nothing loaded yet.
 func New(cfg *Config, r *sqlitecli.Runner, log *audit.Log) *Server {
-	s := &Server{cfg: cfg, runner: r, log: log, states: map[*Source]*state{}, Settle: 100 * time.Millisecond}
+	s := &Server{cfg: cfg, runner: r, log: log, states: map[*Source]*state{}}
 	for _, src := range cfg.Sources {
 		s.states[src] = &state{}
 	}
@@ -101,17 +99,14 @@ func (s *Server) load(ctx context.Context, src *Source, now bool) error {
 	defer st.mu.Unlock()
 	fp, _, err := s.cfg.fingerprint(src)
 	if err == nil && fp == st.loaded && st.snap.Load() != nil {
-		st.pending = ""
-		return nil
-	}
-	if err == nil && !now && fp != st.pending {
-		// Changed since the last check: wait one more to see it hold still.
-		st.pending = fp
 		return nil
 	}
 	var snap *Snapshot
 	if err == nil {
-		snap, fp, err = s.cfg.Read(ctx, s.runner, src, s.Settle)
+		snap, fp, err = s.cfg.Read(ctx, s.runner, src, now)
+	}
+	if errors.Is(err, ErrNotSettled) {
+		return err // read on a later check, once it has settled
 	}
 	if err != nil {
 		if key := fp + "|" + err.Error(); key != st.failed {
@@ -124,11 +119,10 @@ func (s *Server) load(ctx context.Context, src *Source, now bool) error {
 			}
 			s.log.Write(audit.Event{Event: EventKept, Rule: src.ID, Method: "-", Path: "-", Reason: reason})
 		}
-		st.pending = ""
 		return err
 	}
 	st.snap.Store(snap)
-	st.loaded, st.pending, st.failed = fp, "", ""
+	st.loaded, st.failed = fp, ""
 	s.log.Write(audit.Event{Event: EventLoaded, Rule: src.ID, Method: "-", Path: "-",
 		Reason: strconv.Itoa(len(snap.Rows)) + " rows from " + filepath.Base(snap.From)})
 	return nil

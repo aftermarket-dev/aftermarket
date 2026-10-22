@@ -140,7 +140,7 @@ func runBridge(args []string, stdout, stderr io.Writer) int {
 				}
 			}
 		}
-		snap, _, err := cfg.Read(ctx, r, src, 200*time.Millisecond)
+		snap, _, err := cfg.Read(ctx, r, src, true)
 		if err != nil {
 			fmt.Fprintf(stderr, "aftermarket: source %s: %v; nothing was written\n", src.ID, err)
 			return 1

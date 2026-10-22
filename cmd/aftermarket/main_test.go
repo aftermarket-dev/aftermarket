@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aftermarket-dev/aftermarket/internal/version"
 )
@@ -568,5 +570,90 @@ func TestSchemaDiffMapMustCompile(t *testing.T) {
 	code, _, errs = runCLI("schema", "diff", "--old", bad, "--new", filepath.Join(src, "v2/shop.sql"))
 	if code != 1 || errs != bad+", line 3: near \",\": syntax error\n" {
 		t.Fatalf("%d %q", code, errs)
+	}
+}
+
+func TestBridgeCommands(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil && os.Getenv("AFTERMARKET_SQLITE3") == "" {
+		t.Skip("sqlite3 is not installed")
+	}
+	src := "../../examples/legacy-exports"
+	dir := t.TempDir()
+	for _, f := range []string{"bridge.yaml", "fixture.yaml", "inventory.sql", "exports/orders-2026-10-20.csv", "exports/orders-2026-10-21.csv"} {
+		b, _ := os.ReadFile(filepath.Join(src, f))
+		os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755)
+		os.WriteFile(filepath.Join(dir, f), b, 0o644)
+		old := time.Now().Add(-time.Hour)
+		os.Chtimes(filepath.Join(dir, f), old, old)
+	}
+	cfg := filepath.Join(dir, "bridge.yaml")
+	code, out, errs := runCLI("bridge", "check", "--config", cfg)
+	if code != 0 || !strings.Contains(out, "source orders: 4 row(s), 5 column(s) from orders-2026-10-21.csv") || !strings.Contains(out, "source products: 3 row(s), 5 column(s) from inventory.sql") || !strings.HasSuffix(out, "ok\n") {
+		t.Fatalf("check: %d %q %q", code, out, errs)
+	}
+	code, out, _ = runCLI("bridge", "test", "--config", cfg, "--fixture", filepath.Join(dir, "fixture.yaml"))
+	if code != 0 || !strings.Contains(out, "8 case(s), 0 failed") {
+		t.Fatalf("test: %d %q", code, out)
+	}
+	dst := filepath.Join(t.TempDir(), "orders.json")
+	code, out, errs = runCLI("bridge", "convert", "--config", cfg, "--source", "orders", "--out", dst)
+	if code != 0 || !strings.Contains(out, "4 row(s) of orders from orders-2026-10-21.csv") {
+		t.Fatalf("convert: %d %q %q", code, out, errs)
+	}
+	got, _ := os.ReadFile(dst)
+	want := "[\n{\"id\":1001,\"customer\":\"Ada Lovelace\",\"total\":39.8,\"paid\":true,\"placed\":\"2026-10-19\"},\n" +
+		"{\"id\":1002,\"customer\":\"Charles Babbage\",\"total\":15.25,\"paid\":true,\"placed\":\"2026-10-20\"},\n" +
+		"{\"id\":1003,\"customer\":\"Grace Hopper\",\"total\":249.99,\"paid\":true,\"placed\":\"2026-10-21\"},\n" +
+		"{\"id\":1004,\"customer\":\"Turing, Alan\",\"total\":8.5,\"paid\":false,\"placed\":\"2026-10-21\"}\n]\n"
+	if string(got) != want {
+		t.Fatalf("convert output:\n%s", got)
+	}
+	before := map[string]string{}
+	filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			b, _ := os.ReadFile(p)
+			before[p] = string(b)
+		}
+		return nil
+	})
+	for _, bad := range [][]string{
+		{"--source", "orders", "--out", filepath.Join(dir, "exports/orders-2026-10-21.csv")},
+		{"--source", "orders", "--out", filepath.Join(dir, "exports/orders-2026-10-22.csv")},
+		{"--source", "orders", "--out", cfg},
+		{"--source", "products", "--out", filepath.Join(dir, "inventory.sql")},
+	} {
+		if code, _, errs := runCLI(append([]string{"bridge", "convert", "--config", cfg}, bad...)...); code != 1 || errs == "" {
+			t.Errorf("%v: %d %q", bad, code, errs)
+		}
+	}
+	after := map[string]string{}
+	filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			b, _ := os.ReadFile(p)
+			after[p] = string(b)
+		}
+		return nil
+	})
+	if fmt.Sprint(before) != fmt.Sprint(after) {
+		t.Fatal("a refused convert changed the folder")
+	}
+	if code, _, errs := runCLI("bridge", "convert", "--config", cfg, "--source", "nope", "--out", dst); code != 2 || !strings.Contains(errs, "no source called nope") {
+		t.Fatalf("%d %q", code, errs)
+	}
+	for _, args := range [][]string{{"bridge"}, {"bridge", "nope"}, {"bridge", "check"}, {"bridge", "convert", "--config", cfg}, {"bridge", "test", "--config", cfg}} {
+		if code, _, _ := runCLI(args...); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+	bad := filepath.Join(dir, "bad.yaml")
+	os.WriteFile(bad, []byte("version: 1\nsources:\n  - id: a\nendpoints:\n  - path: /a\n    source: b\n"), 0o600)
+	if code, _, errs := runCLI("bridge", "check", "--config", bad); code != 1 || !strings.Contains(errs, "a source needs csv or sqlite") || !strings.Contains(errs, "no source called b") {
+		t.Fatalf("bad config: %d %q", code, errs)
+	}
+	os.WriteFile(filepath.Join(dir, "exports/orders-2026-10-22.csv"), []byte("id,customer\n1,x"), 0o644)
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(filepath.Join(dir, "exports/orders-2026-10-22.csv"), old, old)
+	if code, out, _ := runCLI("bridge", "check", "--config", cfg); code != 1 || !strings.Contains(out, "source orders: problem: the file doesn't end with a line break") {
+		t.Fatalf("broken export: %d %q", code, out)
 	}
 }

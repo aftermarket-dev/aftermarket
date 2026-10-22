@@ -207,13 +207,42 @@ func (e *Endpoint) FieldColumn(name string) string {
 	return name
 }
 
-// Read reads a source into a snapshot. settle is how long to wait before
-// checking the file again: if it changed while being read, or within
-// settle, it is still being written and is refused.
-func (c *Config) Read(ctx context.Context, r *sqlitecli.Runner, s *Source, settle time.Duration) (*Snapshot, string, error) {
+// ErrNotSettled means a CSV file changed too recently to be read: it may
+// still be being written.
+var ErrNotSettled = errors.New("the file changed less than settle ago; it may still be being written")
+
+// Read reads a source into a snapshot. A CSV file is read only once it
+// has been left alone for the config's settle time, and refused if it
+// changes while being read or within settle after; a SQLite database is
+// read in one transaction, which is consistent by itself. wait says
+// whether to wait for a CSV file to settle (true) or return ErrNotSettled.
+func (c *Config) Read(ctx context.Context, r *sqlitecli.Runner, s *Source, wait bool) (*Snapshot, string, error) {
 	fp, file, err := c.fingerprint(s)
 	if err != nil {
 		return nil, "", err
+	}
+	settle := time.Duration(0)
+	if s.IsCSV() {
+		settle = c.Settle
+		st, err := os.Stat(file)
+		if err != nil {
+			return nil, fp, err
+		}
+		if quiet := time.Since(st.ModTime()); quiet < settle {
+			if !wait {
+				return nil, fp, ErrNotSettled
+			}
+			select {
+			case <-ctx.Done():
+				return nil, fp, ctx.Err()
+			case <-time.After(settle - quiet):
+			}
+			if again, _, err := c.fingerprint(s); err != nil || again != fp {
+				return nil, fp, errors.New("the file is still changing")
+			}
+		}
+		// After reading, look again a short while later.
+		settle = min(settle, 100*time.Millisecond)
 	}
 	var snap *Snapshot
 	if s.IsCSV() {
@@ -329,14 +358,27 @@ func (c *Config) readCSV(s *Source, file string) (*Snapshot, error) {
 			return nil, fmt.Errorf("column %s is missing", ct.Name)
 		}
 	}
+	if line, _ := cr.FieldPos(0); line != 1 {
+		return nil, errors.New("line 1 is blank; the header must be the first line")
+	}
+	next := 2 + newlines(header) // the line the next record must start on
 	for {
 		rec, err := cr.Read()
 		if err == io.EOF {
+			if lines := bytes.Count(data, []byte("\n")); next != lines+1 {
+				return nil, fmt.Errorf("line %d is blank; blank lines can't be read as rows", next)
+			}
 			break
 		}
 		if err != nil {
 			return nil, csvMessage(err)
 		}
+		// encoding/csv skips blank lines; in a one-column file a blank
+		// line is a row with an empty value, so refuse rather than lose it.
+		if start, _ := cr.FieldPos(0); start != next {
+			return nil, fmt.Errorf("line %d is blank; blank lines can't be read as rows", next)
+		}
+		next += 1 + newlines(rec)
 		if len(snap.Rows) >= c.MaxRows {
 			return nil, fmt.Errorf("more than max_rows (%d) rows", c.MaxRows)
 		}
@@ -352,6 +394,14 @@ func (c *Config) readCSV(s *Source, file string) (*Snapshot, error) {
 		snap.Rows = append(snap.Rows, row)
 	}
 	return snap, nil
+}
+
+func newlines(rec []string) int {
+	n := 0
+	for _, f := range rec {
+		n += strings.Count(f, "\n")
+	}
+	return n
 }
 
 // csvMessage keeps encoding/csv's line and reason without quoting data.

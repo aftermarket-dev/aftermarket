@@ -27,6 +27,7 @@ const (
 	DefaultLimit      = 100
 	DefaultMaxLimit   = 1000
 	DefaultSQLTimeout = 30 * time.Second
+	DefaultSettle     = 2 * time.Second
 )
 
 // Type is a declared column type.
@@ -48,6 +49,7 @@ type Config struct {
 	MaxRows   int
 	MaxFile   int64
 	Interval  time.Duration // how often sources are checked for changes
+	Settle    time.Duration // how long a CSV file must be left alone before it is read
 	Limit     int           // default page size
 	MaxLimit  int
 	Sources   []*Source
@@ -158,7 +160,7 @@ func Parse(data []byte, dir, path string) (*Config, error) {
 		return nil, err
 	}
 	l := &loader{}
-	cfg := &Config{Path: path, Dir: dir, MaxRows: DefaultMaxRows, MaxFile: DefaultMaxFile, Interval: DefaultInterval, Limit: DefaultLimit, MaxLimit: DefaultMaxLimit}
+	cfg := &Config{Path: path, Dir: dir, MaxRows: DefaultMaxRows, MaxFile: DefaultMaxFile, Interval: DefaultInterval, Settle: DefaultSettle, Limit: DefaultLimit, MaxLimit: DefaultMaxLimit}
 	if root.Kind != yamlite.Map {
 		return nil, fmt.Errorf("a bridge config is a mapping with sources: and endpoints:")
 	}
@@ -220,7 +222,7 @@ func (l *loader) limits(n *yamlite.Node, cfg *Config) {
 		l.errf(n.Line, "limits must be a mapping")
 		return
 	}
-	l.keys(n, "limits", "max_rows", "max_file", "check_every", "page_size", "max_page_size")
+	l.keys(n, "limits", "max_rows", "max_file", "check_every", "settle", "page_size", "max_page_size")
 	for _, p := range n.Pairs {
 		v, ok := l.text(p)
 		if !ok {
@@ -248,13 +250,17 @@ func (l *loader) limits(n *yamlite.Node, cfg *Config) {
 				continue
 			}
 			cfg.MaxFile = sz
-		case "check_every":
+		case "check_every", "settle":
 			d, err := time.ParseDuration(v)
 			if err != nil || d < 10*time.Millisecond || d > time.Hour {
-				l.errf(p.KeyLine, "check_every must be a duration from 10ms to 1h, such as 2s")
+				l.errf(p.KeyLine, "%s must be a duration from 10ms to 1h, such as 2s", p.Key)
 				continue
 			}
-			cfg.Interval = d
+			if p.Key == "settle" {
+				cfg.Settle = d
+			} else {
+				cfg.Interval = d
+			}
 		}
 	}
 	if cfg.Limit > cfg.MaxLimit {
