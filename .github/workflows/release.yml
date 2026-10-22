@@ -123,6 +123,9 @@ jobs:
             cp examples/legacy-shop/map.yaml examples/legacy-shop/reports.sql examples/legacy-shop/compat.sql "$work/examples/legacy-shop/"
             cp examples/legacy-shop/v1/shop.sql "$work/examples/legacy-shop/v1/"
             cp examples/legacy-shop/v2/shop.sql "$work/examples/legacy-shop/v2/"
+            mkdir -p "$work/examples/legacy-exports/exports"
+            cp examples/legacy-exports/bridge.yaml examples/legacy-exports/fixture.yaml examples/legacy-exports/inventory.sql "$work/examples/legacy-exports/"
+            cp examples/legacy-exports/exports/*.csv "$work/examples/legacy-exports/exports/"
             if [ "$os" = windows ]; then
               (cd "$(dirname "$work")" && zip -qr "$GITHUB_WORKSPACE/dist/$name.zip" "$name")
             else
@@ -247,6 +250,32 @@ jobs:
               if $PREFIX "../../$bin" schema compat --map map.yaml --out v2/shop.sql; then exit 1; fi
             )
           fi
+          # AfterBridge: the full example where sqlite3 is there, the orders
+          # alone everywhere, and a live server on every platform.
+          (
+            cd examples/legacy-exports
+            if command -v sqlite3 >/dev/null && [ ! -f ../../aftermarket.exe ]; then
+              $PREFIX "../../$bin" bridge check --config bridge.yaml
+              $PREFIX "../../$bin" bridge test --config bridge.yaml --fixture fixture.yaml
+            fi
+            printf 'version: 1\nsources:\n  - id: orders\n    csv: {folder: exports, pattern: "orders-*.csv"}\n    key: id\n    columns: {id: integer, total: number, paid: boolean}\n    exclude: [internal_note]\nendpoints:\n  - path: /orders\n    source: orders\n    filters: [paid]\n  - path: /orders/{id}\n    source: orders\n' > orders-only.yaml
+            $PREFIX "../../$bin" bridge check --config orders-only.yaml
+            $PREFIX "../../$bin" bridge convert --config orders-only.yaml --source orders --out ../../smoke-orders.json
+            grep -q '"customer":"Turing, Alan"' ../../smoke-orders.json
+            if $PREFIX "../../$bin" bridge convert --config orders-only.yaml --source orders --out exports/orders-2026-10-21.csv; then exit 1; fi
+            $PREFIX "../../$bin" bridge serve --config orders-only.yaml --listen 127.0.0.1:18081 --log ../../bridge.log &
+            bpid=$!
+            for i in $(seq 1 50); do
+              curl -s -o /dev/null http://127.0.0.1:18081/_aftermarket/healthz && break
+              sleep 0.2
+            done
+            curl -s 'http://127.0.0.1:18081/orders?paid=false' | grep -q '"id":1004'
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/orders/1003)" = 200 ]
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/orders/9999)" = 404 ]
+            [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18081/orders)" = 405 ]
+            kill $bpid || true
+            grep -q '"event":"loaded"' ../../bridge.log
+          )
           # The vendor's file is never written.
           if $PREFIX "$bin" config apply --overlay examples/vendor-app/overlay.yaml --out examples/vendor-app/1.0/config.json; then exit 1; fi
 

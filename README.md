@@ -12,12 +12,13 @@ Aftermarket is one program, `aftermarket`, with a subcommand per tool. The tools
 - **AfterHook** (`aftermarket hook`) watches files, folders, HTTP endpoints and command output that change without telling anyone, and sends a signed webhook for each change.
 - **AfterGuard** (`aftermarket guard`) stands in front of an app that can't protect itself, such as an old admin panel with no login, and turns away requests that break your rules: no credential, wrong network, too many tries, or a request that could be read two ways.
 - **AfterSchema** (`aftermarket schema`) keeps an old app's SQL working after its SQLite database moved to a new schema. You describe the old tables in terms of the new ones, and it writes views that show the old tables again, after checking that every old read gives the same rows.
+- **AfterBridge** (`aftermarket bridge`) serves an old app's CSV exports and SQLite files as a read-only JSON API, so other programs can ask for `/orders?paid=false` instead of parsing the files.
 
 It's a single Go binary with no dependencies, licensed under Apache 2.0. Website: [aftermarket.dev](https://aftermarket.dev/).
 
 ## Which tool?
 
-Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know. Use **guard** when an app has no login, no rate limits or a page that should never have been public, and you can't change the app. Use **schema** when the database under an old app was reorganised and the app's queries, reports or scripts still expect the old tables.
+Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know. Use **guard** when an app has no login, no rate limits or a page that should never have been public, and you can't change the app. Use **schema** when the database under an old app was reorganised and the app's queries, reports or scripts still expect the old tables. Use **bridge** when an app only hands its data over as files, and something else needs it as an API.
 
 ## AfterPatch in one example
 
@@ -272,6 +273,40 @@ wrote compat.sql: 2 view(s): customers, orders
 
 `compat.sql` holds plain `CREATE VIEW` statements to review and apply. AfterSchema never writes a database itself. `schema diff` lists every change between the two schemas and marks the ones that break old queries. The example is [`examples/legacy-shop`](examples/legacy-shop), and the full format is in [docs/schema.md](docs/schema.md). AfterSchema needs the `sqlite3` command, 3.37 or later.
 
+## AfterBridge in one example
+
+A legacy shop app writes `orders-YYYY-MM-DD.csv` into a folder every night and keeps its stock in SQLite. One config serves both:
+
+```yaml
+version: 1
+sources:
+  - id: orders
+    csv: {folder: exports, pattern: "orders-*.csv"}
+    key: id
+    columns: {id: integer, total: number, paid: boolean, placed: date}
+    exclude: [internal_note]
+  - id: products
+    sqlite: {db: inventory.db, table: products}
+    key: sku
+    exclude: [photo]
+endpoints:
+  - path: /orders
+    source: orders
+    filters: [paid, placed]
+  - path: /orders/{id}
+    source: orders
+  - path: /products/{sku}
+    source: products
+```
+
+```text
+$ aftermarket bridge serve --config bridge.yaml --listen 127.0.0.1:8080
+$ curl -s 'http://127.0.0.1:8080/orders?paid=false'
+{"items":[{"id":1004,"customer":"Turing, Alan","total":8.5,"paid":false,"placed":"2026-10-21"}],"total":1,"limit":100,"offset":0}
+```
+
+The newest export is picked by name, typed by the declared columns, and read again when it changes. A file that is still being written, cut off or broken is never served; the last good version stays. Only GET and HEAD are answered, and nothing in a request reaches SQL or the file system. The example is [`examples/legacy-exports`](examples/legacy-exports), and the full format is in [docs/bridge.md](docs/bridge.md).
+
 ## Install
 
 Download the archive for your system from the [latest release](https://github.com/aftermarket-dev/aftermarket/releases/latest), unpack it and put `aftermarket` on your PATH.
@@ -352,6 +387,11 @@ aftermarket schema compat --map map.yaml --out compat.sql [--new B]
 aftermarket schema check  --queries old.sql [--map map.yaml] [--new B]
 aftermarket schema test   --map map.yaml --queries old.sql [--old A] [--new B]
 
+aftermarket bridge serve   --config bridge.yaml [--listen ADDR] [--log FILE|-]
+aftermarket bridge check   --config bridge.yaml
+aftermarket bridge convert --config bridge.yaml --source NAME --out FILE
+aftermarket bridge test    --config bridge.yaml --fixture fixture.yaml
+
 aftermarket version
 ```
 
@@ -380,6 +420,7 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **hook delivers every change at least once.** Each change gives exactly one event, nothing is lost while the receiver is down or across restarts, and a repeat after a crash carries the same id. Values under secret-looking keys are sent as `REDACTED`, and the signing secret never leaves the environment.
 - **guard lets through only what the rules allow, and nothing that could be read two ways.** A request turned away never reaches the app, allowed traffic passes byte for byte, rate limits hold with many clients at once and can't be used to fill memory, a client can't set its own identity or address, and no credential reaches the log. The tests check each of these.
 - **config never writes the vendor's file,** whatever path you give `--out`. A failed apply leaves the old output as it was, and applying twice gives the same bytes. Values under keys such as `password` or `token` are never printed.
+- **bridge never writes its sources, and never serves a half-written file.** Requests only pick rows from snapshots in memory, so nothing they send reaches SQL or the file system. A CSV file is read once it has been left alone for `settle` (2 seconds by default) and only if it is complete; otherwise the last good version stays. Every answer reads back as exactly the values in the file, types included.
 - **schema never writes a database.** Databases are opened read-only in the `sqlite3` shell's safe mode, and `compat` writes only its `--out` file, never one of its inputs. Every read `test` passes gives the same rows, with the same types, through the views as on the old database.
 
 Recorded results, including the latency each tool adds, are in [test/results](test/results).
@@ -396,6 +437,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - AfterConfig doesn't keep comments when it writes YAML, or when a TOML change can't be made on the file's own lines, such as turning a table into a single value. In that case sub-tables also move after the plain keys of their table, as TOML requires. The vendor's file keeps its comments.
 - Config files use a strict subset of YAML: mappings, lists, quoted and plain values, one-line `[ ]` and `{ }` collections, `|` and `>` blocks, and comments. Anchors, aliases, tags and multiple documents are rejected with a line number.
 - AfterSchema's views serve reads; an old app that writes to a mapped table gets an error from SQLite. An old table whose name the new schema still uses for a table can't get a view. SQLite only.
+- AfterBridge only reads: no writes, no logins (put AfterGuard in front), no joins across sources, and filters are exact matches. A whole source is held in memory. An export written with pauses longer than `settle` can be read between them; writing to another name and renaming avoids that.
 - One upstream per proxy. Run one proxy per service.
 - record redacts headers, query values and JSON fields. Values in a URL path and in bodies that aren't JSON are stored as sent, so keep those out with `when:`. Binary bodies aren't recorded at all.
 
@@ -408,7 +450,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.8.0 adds `aftermarket schema` (AfterSchema). 0.7.0 added TOML to `aftermarket config`, 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.9.0 adds `aftermarket bridge` (AfterBridge). 0.8.0 added `aftermarket schema` (AfterSchema), 0.7.0 added TOML to `aftermarket config`, 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 

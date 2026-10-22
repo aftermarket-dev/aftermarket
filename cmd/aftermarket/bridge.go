@@ -135,7 +135,7 @@ func runBridge(args []string, stdout, stderr io.Writer) int {
 		if src.Folder != "" {
 			if abs, err := filepath.Abs(*out); err == nil && filepath.Dir(abs) == filepath.Clean(src.Folder) {
 				if ok, _ := filepath.Match(src.Pattern, filepath.Base(abs)); ok {
-					fmt.Fprintf(stderr, "aftermarket: --out would be read as one of %s's exports; choose another name or folder\n", src.ID)
+					fmt.Fprintf(stderr, "aftermarket: --out would be read as an export of source %s; choose another name or folder\n", src.ID)
 					return 1
 				}
 			}

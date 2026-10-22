@@ -57,3 +57,6 @@ jobs:
           go run ../../cmd/aftermarket schema diff --map map.yaml
           go run ../../cmd/aftermarket schema check --queries reports.sql --map map.yaml
           go run ../../cmd/aftermarket schema test --queries reports.sql --map map.yaml
+          cd ../legacy-exports
+          go run ../../cmd/aftermarket bridge check --config bridge.yaml
+          go run ../../cmd/aftermarket bridge test --config bridge.yaml --fixture fixture.yaml
