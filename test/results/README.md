@@ -2,19 +2,20 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.8.0
-- Recorded: 2026-10-21T22:35:52Z
+- Version: 0.9.0
+- Recorded: 2026-10-22T05:15:45Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-506 of 506 tests passed (race detector on).
+530 of 530 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
 | cmd/aftermarket | TestAdaptCheckAndTest | pass |
 | cmd/aftermarket | TestAdaptCheckReportsErrorsAndOverlaps | pass |
 | cmd/aftermarket | TestAdaptRunNeedsUpstream | pass |
+| cmd/aftermarket | TestBridgeCommands | pass |
 | cmd/aftermarket | TestCheckExample | pass |
 | cmd/aftermarket | TestCheckReportsErrorsAndOverlaps | pass |
 | cmd/aftermarket | TestConfigCommands | pass |
@@ -46,6 +47,8 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | examples/legacy-customer | TestFixtureFilePasses | pass |
 | examples/legacy-customer | TestOldClientNeedsTheRules | pass |
 | examples/legacy-customer | TestRemovingEitherRuleBreaksTheClient | pass |
+| examples/legacy-exports | TestExampleFixture | pass |
+| examples/legacy-exports | TestInventoryDatabaseFile | pass |
 | examples/legacy-shop | TestLostDataIsCaught | pass |
 | examples/legacy-shop | TestOldReportsReadTheSame | pass |
 | examples/vendor-app | TestFixturePasses | pass |
@@ -105,6 +108,27 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/adapt | TestUnmatchedTrafficIsByteIdentical | pass |
 | internal/adapt | TestUnsafeValuesNeverReachThePath | pass |
 | internal/adapt | TestUpstreamDownGives502 | pass |
+| internal/bridge | TestBadCSVIsNeverServed | pass |
+| internal/bridge | TestBlankLinesAreRefused | pass |
+| internal/bridge | TestCSVDetails | pass |
+| internal/bridge | TestConfigProblemsAreListed | pass |
+| internal/bridge | TestCutDumpIsRefused | pass |
+| internal/bridge | TestFiltersMustBeShown | pass |
+| internal/bridge | TestFixedPathsComeFirst | pass |
+| internal/bridge | TestFutureModificationTime | pass |
+| internal/bridge | TestHalfWrittenFilesAreNeverServed | pass |
+| internal/bridge | TestLogLeavesOutUnknownNames | pass |
+| internal/bridge | TestNewestExportByName | pass |
+| internal/bridge | TestNumberSpellings | pass |
+| internal/bridge | TestRandomValuesReadBackExactly | pass |
+| internal/bridge | TestRequestsNeverReachSQL | pass |
+| internal/bridge | TestSQLiteSources | pass |
+| internal/bridge | TestSQLiteValuesExactly | pass |
+| internal/bridge | TestSameSizeAndTimeReplacement | pass |
+| internal/bridge | TestSecondReviewCases | pass |
+| internal/bridge | TestServeOrders | pass |
+| internal/bridge | TestSourcesAreNeverWritten | pass |
+| internal/bridge | TestUnreadSourceGives503 | pass |
 | internal/config | TestApplyTwiceGivesTheSameBytes | pass |
 | internal/config | TestDeepNestingIsRefused | pass |
 | internal/config | TestEnvFilesKeepEveryLineTheOverlayDoesntChange | pass |
@@ -364,17 +388,17 @@ Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up,
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 57.2 µs | 332.2 µs | 25959 |
-| proxy, no rule matches | 142.1 µs | 1133.5 µs | 5846 |
-| proxy, both example rules applied | 200.1 µs | 2193.1 µs | 5724 |
-| adapt: direct to v2, one customer | 49.1 µs | 364.4 µs | 25009 |
-| adapt: v1 lookup rebuilt from v2 | 195.7 µs | 2253.1 µs | 5326 |
-| adapt: direct to v2, list | 48.2 µs | 349.1 µs | 23893 |
-| adapt: v1 list rebuilt from v2 | 237.8 µs | 2070.8 µs | 4795 |
-| record: v2 lookup saved to a fixture | 212.0 µs | 1566.1 µs | 6119 |
+| direct to upstream | 28.3 µs | 159.7 µs | 36238 |
+| proxy, no rule matches | 85.1 µs | 814.0 µs | 10216 |
+| proxy, both example rules applied | 142.3 µs | 1353.3 µs | 9297 |
+| adapt: direct to v2, one customer | 30.0 µs | 252.8 µs | 36270 |
+| adapt: v1 lookup rebuilt from v2 | 118.7 µs | 1408.1 µs | 8489 |
+| adapt: direct to v2, list | 31.4 µs | 228.7 µs | 31352 |
+| adapt: v1 list rebuilt from v2 | 151.0 µs | 1913.4 µs | 8375 |
+| record: v2 lookup saved to a fixture | 143.3 µs | 1157.8 µs | 8115 |
 
-Added by the proxy when no rule matches: 84.9 µs at p50, 801.3 µs at p99.
-Added by the proxy with both example rules applied: 142.9 µs at p50, 1860.9 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 146.6 µs at p50, 1888.7 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 189.6 µs at p50, 1721.7 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 162.9 µs at p50, 1201.7 µs at p99.
+Added by the proxy when no rule matches: 56.8 µs at p50, 654.3 µs at p99.
+Added by the proxy with both example rules applied: 114.0 µs at p50, 1193.6 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 88.7 µs at p50, 1155.3 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 119.6 µs at p50, 1684.7 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 113.3 µs at p50, 905.0 µs at p99.
