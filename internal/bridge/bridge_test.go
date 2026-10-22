@@ -337,7 +337,8 @@ func TestSQLiteSources(t *testing.T) {
 	r := needSQLite(t)
 	dump := `CREATE TABLE p (sku TEXT PRIMARY KEY, name TEXT, price REAL, n INTEGER, flag INTEGER, photo BLOB, big INTEGER);
 INSERT INTO p VALUES ('a', 'it''s', 0.1, 1, 1, x'00', 9007199254740993), ('b', 'x' || char(10) || 'y', 3, NULL, 0, NULL, -1);
-UPDATE p SET price = 0.1 + 0.2 WHERE sku = 'a';`
+UPDATE p SET price = 0.1 + 0.2 WHERE sku = 'a';
+`
 	cfg := `version: 1
 sources:
   - id: p
@@ -394,7 +395,7 @@ func TestRequestsNeverReachSQL(t *testing.T) {
 		t.Skip("can't run a shell wrapper here")
 	}
 	cfg := "version: 1\nsources:\n  - id: p\n    sqlite: {db: p.sql, table: p}\n    key: sku\nendpoints:\n  - path: /p/{sku}\n    source: p\n  - path: /p\n    source: p\n    filters: [name]\n"
-	c, _ := setup(t, cfg, map[string]string{"p.sql": "CREATE TABLE p (sku TEXT, name TEXT); INSERT INTO p VALUES ('a', 'b');"})
+	c, _ := setup(t, cfg, map[string]string{"p.sql": "CREATE TABLE p (sku TEXT, name TEXT); INSERT INTO p VALUES ('a', 'b');\n"})
 	r := &sqlitecli.Runner{Bin: wrapper, Timeout: 10 * time.Second, MaxOut: 1 << 20}
 	s, _ := serve(t, c, r)
 	before, _ := os.ReadFile(logf)
@@ -668,5 +669,200 @@ func TestBlankLinesAreRefused(t *testing.T) {
 	s, _ := serve(t, c, nil)
 	if _, _, body := get(s, "GET", "/o"); !strings.Contains(body, `"total":2`) {
 		t.Fatalf("%s", body)
+	}
+}
+
+// From the 0.9.0 review: a .sql dump cut off between statements is
+// refused, and so is one still being written.
+func TestCutDumpIsRefused(t *testing.T) {
+	r := needSQLite(t)
+	full := "PRAGMA foreign_keys=OFF;\nBEGIN TRANSACTION;\nCREATE TABLE t(k, n);\nINSERT INTO t VALUES(1,1);\nINSERT INTO t VALUES(2,2);\nINSERT INTO t VALUES(3,3);\nCOMMIT;\n"
+	cfg := "version: 1\nsources:\n  - id: t\n    sqlite: {db: d.sql, query: \"SELECT k, n FROM t\"}\nendpoints:\n  - path: /t\n    source: t\n"
+	for name, body := range map[string]string{
+		"cut between statements": full[:strings.Index(full, "INSERT INTO t VALUES(2")],
+		"cut mid-line":           full[:strings.Index(full, "(2,2)")],
+		"empty":                  "",
+	} {
+		c, _ := setup(t, cfg, map[string]string{"d.sql": body})
+		s, _ := serve(t, c, r)
+		if code, _, b := get(s, "GET", "/t"); code != 503 {
+			t.Errorf("%s: served %s", name, b)
+		}
+	}
+	c, dir := setup(t, cfg, map[string]string{"d.sql": full})
+	s, _ := serve(t, c, r)
+	if _, _, b := get(s, "GET", "/t"); !strings.Contains(b, `"total":3`) {
+		t.Fatalf("%s", b)
+	}
+	// A rewritten dump waits for settle like a CSV file.
+	c.Settle = time.Hour
+	os.WriteFile(filepath.Join(dir, "d.sql"), []byte(strings.Replace(full, "(3,3)", "(3,4)", 1)), 0o644)
+	s.Check(context.Background())
+	if _, _, b := get(s, "GET", "/t"); !strings.Contains(b, `"n":3`) {
+		t.Fatalf("read before it settled: %s", b)
+	}
+}
+
+// From the 0.9.0 review: a modification time in the future can't hold a
+// read back forever; the quiet time counts on the bridge's own clock.
+func TestFutureModificationTime(t *testing.T) {
+	cfg := "version: 1\nsources:\n  - id: o\n    csv: {file: o.csv}\nendpoints:\n  - path: /o\n    source: o\n"
+	c, dir := setup(t, cfg, map[string]string{"o.csv": "x\n1\n"})
+	c.Settle = 200 * time.Millisecond
+	future := time.Now().Add(time.Hour)
+	os.Chtimes(filepath.Join(dir, "o.csv"), future, future)
+	start := time.Now()
+	snap, _, err := c.Read(context.Background(), nil, c.Sources[0], time.Now(), true)
+	if err != nil || len(snap.Rows) != 1 {
+		t.Fatalf("%v", err)
+	}
+	if d := time.Since(start); d < 200*time.Millisecond || d > 5*time.Second {
+		t.Fatalf("waited %v", d)
+	}
+	// Without waiting it is not settled yet, then it is.
+	s := New(c, nil, nil)
+	s.Check(context.Background())
+	if code, _, _ := get(s, "GET", "/o"); code != 503 {
+		t.Fatal("served before it settled")
+	}
+	time.Sleep(250 * time.Millisecond)
+	s.Check(context.Background())
+	if code, _, _ := get(s, "GET", "/o"); code != 200 {
+		t.Fatal("never served")
+	}
+}
+
+// From the 0.9.0 review: SQLite values are served as stored or refused,
+// never changed: text that isn't UTF-8, NUL and U+2028 in text, whole
+// numbers too big for a float in a number column.
+func TestSQLiteValuesExactly(t *testing.T) {
+	r := needSQLite(t)
+	dump := "CREATE TABLE t (k INTEGER, s TEXT);\nINSERT INTO t VALUES (1, 'a' || char(0) || 'b' || char(8232) || 'é'), (2, 'x');\n"
+	cfg := "version: 1\nsources:\n  - id: t\n    sqlite: {db: d.sql, table: t}\n    key: k\nendpoints:\n  - path: /t/{k}\n    source: t\n"
+	c, _ := setup(t, cfg, map[string]string{"d.sql": dump})
+	s, _ := serve(t, c, r)
+	if _, _, b := get(s, "GET", "/t/1"); b != `{"k":1,"s":"a\u0000b\u2028é"}`+"\n" {
+		t.Fatalf("%s", b)
+	}
+	for name, d := range map[string]string{
+		"invalid UTF-8": "CREATE TABLE t (k INTEGER, s TEXT);\nINSERT INTO t VALUES (1, CAST(X'61FF62' AS TEXT));\n",
+		"lone byte":     "CREATE TABLE t (k INTEGER, s TEXT);\nINSERT INTO t VALUES (1, CAST(X'C3' AS TEXT));\n",
+	} {
+		c, _ := setup(t, cfg, map[string]string{"d.sql": d})
+		s, log := serve(t, c, r)
+		if code, _, _ := get(s, "GET", "/t/1"); code != 503 || !strings.Contains(log.String(), "isn't valid UTF-8") {
+			t.Errorf("%s: %d %s", name, code, log.String())
+		}
+	}
+	big := "CREATE TABLE t (k INTEGER, n INTEGER);\nINSERT INTO t VALUES (1, 9007199254740993);\n"
+	c, _ = setup(t, strings.Replace(cfg, "key: k", "key: k\n    columns: {n: number}", 1), map[string]string{"d.sql": big})
+	s, _ = serve(t, c, r)
+	if code, _, _ := get(s, "GET", "/t/1"); code != 503 {
+		t.Fatal("a big integer was rounded into a number column")
+	}
+	c, _ = setup(t, cfg, map[string]string{"d.sql": big})
+	s, _ = serve(t, c, r)
+	if _, _, b := get(s, "GET", "/t/1"); b != `{"k":1,"n":9007199254740993}`+"\n" {
+		t.Fatalf("%s", b)
+	}
+}
+
+// From the 0.9.0 review: numbers are read as written in decimal, not in
+// Go's other spellings, and -0 is 0.
+func TestNumberSpellings(t *testing.T) {
+	cfg := "version: 1\nsources:\n  - id: o\n    csv: {file: o.csv}\n    key: n\n    columns: {n: number, i: integer}\nendpoints:\n  - path: /o/{n}\n    source: o\n  - path: /o\n    source: o\n    filters: [n, i]\n"
+	for _, bad := range []string{"0x1p4", "1_000.5", "1e-400", "1e400", "Inf", "NaN", ".", "1.2.3", "--1"} {
+		c, _ := setup(t, cfg, map[string]string{"o.csv": "n,i\n" + bad + ",1\n"})
+		s, _ := serve(t, c, nil)
+		if code, _, _ := get(s, "GET", "/o"); code != 503 {
+			t.Errorf("number %q accepted", bad)
+		}
+	}
+	for _, bad := range []string{"0x10", "1_0", "+-1", "1e3"} {
+		c, _ := setup(t, cfg, map[string]string{"o.csv": "n,i\n1," + bad + "\n"})
+		s, _ := serve(t, c, nil)
+		if code, _, _ := get(s, "GET", "/o"); code != 503 {
+			t.Errorf("integer %q accepted", bad)
+		}
+	}
+	c, _ := setup(t, cfg, map[string]string{"o.csv": "n,i\n-0,1\n+.5,+2\n1E2,-3\n"})
+	s, _ := serve(t, c, nil)
+	for path, want := range map[string]string{
+		"/o/0":        `{"n":0.0,"i":1}`,
+		"/o/-0.0":     `{"n":0.0,"i":1}`,
+		"/o/0.5":      `{"n":0.5,"i":2}`,
+		"/o/100":      `{"n":100.0,"i":-3}`,
+		"/o?n=0x1p-1": `{"error":"n must be a number"}`,
+		"/o?i=0x2":    `{"error":"i must be a whole number"}`,
+	} {
+		if _, _, b := get(s, "GET", path); b != want+"\n" {
+			t.Errorf("%s: %s", path, b)
+		}
+	}
+	c, _ = setup(t, cfg, map[string]string{"o.csv": "n,i\n0,1\n-0,2\n"})
+	s, log := serve(t, c, nil)
+	if code, _, _ := get(s, "GET", "/o"); code != 503 || !strings.Contains(log.String(), "same n") {
+		t.Fatalf("0 and -0 as two keys: %d %s", code, log.String())
+	}
+}
+
+// From the 0.9.0 review: only query names the endpoint knows are logged.
+func TestLogLeavesOutUnknownNames(t *testing.T) {
+	c, _ := setup(t, ordersCfg, map[string]string{"orders.csv": ordersCSV})
+	s, log := serve(t, c, nil)
+	get(s, "GET", "/orders?api_key%3Dsk_live_123=1&paid=true")
+	get(s, "GET", "/orders/1?token=abc")
+	if strings.Contains(log.String(), "sk_live") || strings.Contains(log.String(), "token") {
+		t.Fatalf("%s", log.String())
+	}
+	if !strings.Contains(log.String(), `"query_keys":["paid","(1 other)"]`) {
+		t.Fatalf("%s", log.String())
+	}
+}
+
+// From the 0.9.0 review: a list at a fixed path wins over an item path
+// that could also match it.
+func TestFixedPathsComeFirst(t *testing.T) {
+	cfg := "version: 1\nsources:\n  - id: a\n    csv: {file: a.csv}\n    key: k\nendpoints:\n  - path: /a/{k}\n    source: a\n  - path: /a/b\n    source: a\n"
+	c, _ := setup(t, cfg, map[string]string{"a.csv": "k\nb\nc\n"})
+	s, _ := serve(t, c, nil)
+	if _, _, b := get(s, "GET", "/a/b"); !strings.Contains(b, `"items"`) {
+		t.Fatalf("%s", b)
+	}
+	if _, _, b := get(s, "GET", "/a/c"); b != `{"k":"c"}`+"\n" {
+		t.Fatalf("%s", b)
+	}
+}
+
+// From the 0.9.0 review: filters are fields the endpoint shows.
+func TestFiltersMustBeShown(t *testing.T) {
+	for _, cfg := range []string{
+		"version: 1\nsources:\n  - id: o\n    csv: {file: o.csv}\n    exclude: [note]\nendpoints:\n  - path: /o\n    source: o\n    filters: [note]\n",
+		"version: 1\nsources:\n  - id: o\n    csv: {file: o.csv}\nendpoints:\n  - path: /o\n    source: o\n    fields: [id]\n    filters: [customer]\n",
+	} {
+		if _, err := Parse([]byte(cfg), ".", "b.yaml"); err == nil {
+			t.Errorf("accepted:\n%s", cfg)
+		}
+	}
+}
+
+// From the 0.9.0 review: a file replaced with the same size and
+// modification time is still seen as changed.
+func TestSameSizeAndTimeReplacement(t *testing.T) {
+	if !fileIDWorks() {
+		t.Skip("no inode on this system")
+	}
+	cfg := "version: 1\nsources:\n  - id: o\n    csv: {file: o.csv}\nendpoints:\n  - path: /o\n    source: o\n"
+	c, dir := setup(t, cfg, map[string]string{"o.csv": "x\n1\n"})
+	s, _ := serve(t, c, nil)
+	p := filepath.Join(dir, "o.csv")
+	st, _ := os.Stat(p)
+	tmp := filepath.Join(dir, "new.tmp")
+	os.WriteFile(tmp, []byte("x\n2\n"), 0o644)
+	os.Chtimes(tmp, st.ModTime(), st.ModTime())
+	os.Rename(tmp, p)
+	s.Check(context.Background())
+	if _, _, b := get(s, "GET", "/o"); !strings.Contains(b, `"x":"2"`) {
+		t.Fatalf("%s", b)
 	}
 }

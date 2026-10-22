@@ -73,25 +73,25 @@ Paths in the file are relative to the config file's folder.
 | `csv.file` | One CSV file. |
 | `csv.folder`, `csv.pattern` | The last file by name in a folder that matches a pattern, such as `orders-*.csv`. Exports named by date give the newest day. |
 | `csv.delimiter` | `,` (the default), `;`, `|` or `tab`. |
-| `sqlite.db` | A SQLite database file, or a `.sql` dump, which is loaded into memory. |
+| `sqlite.db` | A SQLite database file (stored as UTF-8, the default), or a `.sql` dump, which is loaded into memory. |
 | `sqlite.table` | A table to serve whole. |
 | `sqlite.query` | Or one fixed `SELECT`, written in the config. |
 | `key` | The column item endpoints look rows up by. Every row must have one, and no two the same. |
 | `columns` | Declared types: `text`, `integer`, `number`, `boolean` or `date`. |
 | `exclude` | Columns never read into the snapshot or served. |
 
-A CSV file has a header row. Columns not listed under `columns` are text. In a declared column, an empty value is `null`; `boolean` reads `true`, `false`, `yes`, `no`, `1` and `0`; `date` must be `YYYY-MM-DD` and a real day. A value that doesn't fit its type refuses the whole file, with the line and column, and never the value itself.
+A CSV file has a header row. Columns not listed under `columns` are text. A line break inside a quoted value is served as `\n`, whether the file wrote `\r\n` or `\n` (Go's CSV reader reads both the same). In a declared column, an empty value is `null`; `integer` is an optional sign and digits; `number` is written in decimal, with an optional point and exponent (`0x10`, `1_000`, `Inf` and numbers too big for a float or too small to tell from zero are refused, not changed); `boolean` reads `true`, `false`, `yes`, `no`, `1` and `0`; `date` must be `YYYY-MM-DD` and a real day. A value that doesn't fit its type refuses the whole file, with the line and column, and never the value itself.
 
-A SQLite column keeps the type SQLite stored: integers as integers, reals as numbers with every digit kept, text as strings, NULL as `null`. A declared type is checked: `integer` must hold integers, `number` takes integers and reals, `boolean` must hold 0 or 1, `date` must be text in `YYYY-MM-DD`. A blob can't go into JSON, so a source with one is refused; exclude the column.
+A SQLite column keeps the type SQLite stored: integers as integers, reals as numbers with every digit kept, text as strings, NULL as `null`. A declared type is checked: `integer` must hold integers, `number` takes integers and reals (but not a whole number above 2^53, which a float can't hold exactly; declare that column `integer`), `boolean` must hold 0 or 1, `date` must be text in `YYYY-MM-DD`. Text that isn't valid UTF-8 is refused. A blob can't go into JSON, so a source with one is refused; exclude the column.
 
 ### Endpoints
 
 | Key | Meaning |
 |---|---|
-| `path` | `/orders` answers a list. `/orders/{id}` answers one row by the source's key. Only the last part can be a `{name}`. |
+| `path` | `/orders` answers a list. `/orders/{id}` answers one row by the source's key. Only the last part can be a `{name}`. A fixed path wins over a `{name}` that could also match it. |
 | `source` | The source it reads. |
 | `fields` | What is shown, in order: a list of columns, or a map of names to columns, which renames them. Without it, every column under its own name. |
-| `filters` | Field names a list can be filtered by. |
+| `filters` | Field names a list can be filtered by. With `fields`, each must be one of them, so a filter can't probe a column the endpoint hides. |
 
 ## Requests and answers
 
@@ -111,7 +111,7 @@ GET /orders/1004
 {"id":1004,"customer":"Turing, Alan","total":8.5,"paid":false,"placed":"2026-10-21"}
 ```
 
-A key is read as the key column's type, so `/orders/01004` finds order 1004 when `id` is an integer. A key that isn't there gets 404.
+A key is read as the key column's type, so `/orders/01004` finds order 1004 when `id` is an integer, and `0` and `-0` are the same number. A key that isn't there gets 404. A key containing `/`, or one that is `.` or `..`, can't be asked for, since such a path is refused with 400.
 
 Numbers keep their type: a `number` that happens to be whole is written `15.0`, an `integer` is written `15`.
 
@@ -127,9 +127,9 @@ Errors are JSON, `{"error": "..."}`. Every answer has `Content-Length`. HEAD get
 
 ## When files change
 
-Every `check_every`, AfterBridge looks at each source's file: which file, its size and its modification time. When they change, the source is read again into a new snapshot, and requests move to it at once. Until then, every request is answered from the snapshot it had.
+Every `check_every`, AfterBridge looks at each source's file: which file, its size, its modification time and, where the system has them, its inode and change time, so a file replaced by renaming another over it is seen even with the same size and time. When they change, the source is read again into a new snapshot, and requests move to it at once. Until then, every request is answered from the snapshot it had.
 
-A CSV file is read only once it has been left alone for `settle`, measured from its modification time, and only if it doesn't change while it is read. It is refused, and the last good snapshot stays, when:
+A CSV file or a `.sql` dump is read only once it has been left alone for `settle`, and only if it doesn't change while it is read. The quiet time counts from when AfterBridge first saw the file as it is now, on its own clock, or from the file's modification time when that is older; a modification time in the future counts as just now. A CSV file is refused, and the last good snapshot stays, when:
 
 - it doesn't end with a line break, or is empty;
 - a quoted value never ends, or a row has the wrong number of values;
@@ -137,11 +137,13 @@ A CSV file is read only once it has been left alone for `settle`, measured from 
 - a value doesn't fit its column's type, a key is missing or repeated, or a column the config uses is gone;
 - it isn't valid UTF-8, or is over `max_file` or `max_rows`.
 
-Each problem is logged once. A source that was never read answers 503 until it can be.
+A `.sql` dump is refused when it doesn't end with a line break or starts a transaction it never commits, as a dump from `sqlite3 .dump` cut off partway would.
+
+Each problem is logged once. `bridge serve` answers from the start; a source that hasn't been read yet, because it is still settling or can't be read, answers 503 until it can be.
 
 An export written slowly, with pauses longer than `settle`, can still be read between two pauses. If your app does that, have it write to another name and rename the file when it's done (renaming is instant), or raise `settle`.
 
-A SQLite source's rows are read with a single query, which SQLite answers from one consistent state, so it is read again as soon as the database or its `-wal` file changes, with no settle time. Reading a database in WAL mode leaves the usual `-wal` and `-shm` helper files next to it, as any SQLite reader does; the database itself is not changed.
+A SQLite database's rows are read with a single query, which SQLite answers from one consistent state, so it is read again as soon as the database or its `-wal` file changes, with no settle time. Reading a database in WAL mode leaves the usual `-wal` and `-shm` helper files next to it, as any SQLite reader does; the database itself is not changed.
 
 ## The log
 
@@ -154,7 +156,7 @@ A SQLite source's rows are read with a single query, which SQLite answers from o
 {"time":"...","event":"kept","request":0,"rule":"orders","method":"-","path":"-","reason":"line 3, column id: not a whole number; still serving the last good snapshot"}
 ```
 
-Requests are logged by endpoint pattern and query parameter names, never by key or value.
+Requests are logged by endpoint pattern and the query parameter names the endpoint knows, never by key or value; any other names are only counted, as in `"(1 other)"`, since a client could put a value where a name goes.
 
 ## check, convert and test
 
@@ -187,5 +189,5 @@ cases:
 - Reads only: no writes, no authentication. Put [AfterGuard](guard.md) in front for logins and rate limits.
 - One source per endpoint; no joins across sources.
 - CSV and SQLite only; no XML, fixed-width files or other databases.
-- A whole source is held in memory, up to `max_rows` rows.
+- A whole source is held in memory, up to `max_rows` rows. A SQLite source is also limited by how much `sqlite3` may print in one read, 64 MiB, which comes to less table data than that.
 - Filters are exact matches; no ranges, sorting or search.

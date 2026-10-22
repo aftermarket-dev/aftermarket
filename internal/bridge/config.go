@@ -564,6 +564,23 @@ func (l *loader) endpoint(n *yamlite.Node, cfg *Config) *Endpoint {
 				l.errf(n.Line, "field %s shows column %s, which source %s excludes", f.Name, f.Column, e.Source.ID)
 			}
 		}
+		// A filter is one of the fields the endpoint shows, so it can't be
+		// used to probe a column the endpoint hides.
+		for _, f := range e.Filters {
+			if len(e.Fields) > 0 {
+				shown := false
+				for _, fl := range e.Fields {
+					if fl.Name == f {
+						shown = true
+					}
+				}
+				if !shown {
+					l.errf(n.Line, "filter %s isn't one of the endpoint's fields", f)
+				}
+			} else if e.Source.Exclude[f] {
+				l.errf(n.Line, "filter %s is a column source %s excludes", f, e.Source.ID)
+			}
+		}
 	}
 	return e
 }

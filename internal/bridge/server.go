@@ -36,6 +36,8 @@ type state struct {
 	snap   atomic.Pointer[Snapshot]
 	mu     sync.Mutex
 	loaded string // fingerprint of the snapshot being served
+	seenFP string // the files as last seen, and when the bridge first saw them so
+	seenAt time.Time
 	failed string // fingerprint and problem last logged, so it is logged once
 }
 
@@ -101,9 +103,12 @@ func (s *Server) load(ctx context.Context, src *Source, now bool) error {
 	if err == nil && fp == st.loaded && st.snap.Load() != nil {
 		return nil
 	}
+	if err == nil && fp != st.seenFP {
+		st.seenFP, st.seenAt = fp, time.Now()
+	}
 	var snap *Snapshot
 	if err == nil {
-		snap, fp, err = s.cfg.Read(ctx, s.runner, src, now)
+		snap, fp, err = s.cfg.Read(ctx, s.runner, src, st.seenAt, now)
 	}
 	if errors.Is(err, ErrNotSettled) {
 		return err // read on a later check, once it has settled
@@ -159,10 +164,20 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, ev *audit.Event) 
 	if err != nil {
 		return writeError(w, r, http.StatusBadRequest, "the query string can't be read")
 	}
+	// Only names the endpoint knows are logged; anything else might be a
+	// value sent where a name goes.
+	other := 0
 	for k := range q {
-		ev.QueryKeys = append(ev.QueryKeys, k)
+		if known(ep, k) {
+			ev.QueryKeys = append(ev.QueryKeys, k)
+		} else {
+			other++
+		}
 	}
 	sort.Strings(ev.QueryKeys)
+	if other > 0 {
+		ev.QueryKeys = append(ev.QueryKeys, "("+strconv.Itoa(other)+" other)")
+	}
 	snap := s.Snapshot(ep.Source)
 	if snap == nil {
 		w.Header().Set("Retry-After", strconv.Itoa(int(s.cfg.Interval/time.Second)+1))
@@ -254,6 +269,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, ev *audit.Event) 
 	return writeJSON(w, r, http.StatusOK, b.Bytes())
 }
 
+func known(ep *Endpoint, k string) bool {
+	if ep.IsItem() {
+		return false
+	}
+	if k == "limit" || k == "offset" {
+		return true
+	}
+	for _, f := range ep.Filters {
+		if f == k {
+			return true
+		}
+	}
+	return false
+}
+
 func page(rows []int, offset, limit int) []int {
 	if offset >= len(rows) {
 		return nil
@@ -293,9 +323,22 @@ func safeName(k string) string {
 }
 
 // match finds the endpoint for a path, and the key for an item endpoint.
+// Fixed paths come first, so /a/b is the list at /a/b even when /a/{k}
+// exists.
 func (s *Server) match(u *url.URL) (*Endpoint, string, bool) {
 	segs := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
+	ordered := make([]*Endpoint, 0, len(s.cfg.Endpoints))
 	for _, ep := range s.cfg.Endpoints {
+		if !ep.IsItem() {
+			ordered = append(ordered, ep)
+		}
+	}
+	for _, ep := range s.cfg.Endpoints {
+		if ep.IsItem() {
+			ordered = append(ordered, ep)
+		}
+	}
+	for _, ep := range ordered {
 		want := len(ep.Prefix)
 		if ep.IsItem() {
 			want++

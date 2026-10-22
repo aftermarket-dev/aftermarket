@@ -626,6 +626,14 @@ func TestBridgeCommands(t *testing.T) {
 			t.Errorf("%v: %d %q", bad, code, errs)
 		}
 	}
+	// Through a link to the exports folder, too.
+	link := filepath.Join(dir, "exl")
+	if os.Symlink(filepath.Join(dir, "exports"), link) == nil {
+		if code, _, _ := runCLI("bridge", "convert", "--config", cfg, "--source", "orders", "--out", filepath.Join(link, "orders-2099.csv")); code != 1 {
+			t.Errorf("convert through a linked folder: %d", code)
+		}
+		os.Remove(link)
+	}
 	after := map[string]string{}
 	filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() {

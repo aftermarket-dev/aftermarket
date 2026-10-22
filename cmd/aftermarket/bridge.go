@@ -133,14 +133,14 @@ func runBridge(args []string, stdout, stderr io.Writer) int {
 			inputs = append(inputs, src.DB+"-wal", src.DB+"-shm", src.DB+"-journal")
 		}
 		if src.Folder != "" {
-			if abs, err := filepath.Abs(*out); err == nil && filepath.Dir(abs) == filepath.Clean(src.Folder) {
-				if ok, _ := filepath.Match(src.Pattern, filepath.Base(abs)); ok {
+			if config.SameFile(filepath.Dir(*out), src.Folder) {
+				if ok, _ := filepath.Match(strings.ToLower(src.Pattern), strings.ToLower(filepath.Base(*out))); ok {
 					fmt.Fprintf(stderr, "aftermarket: --out would be read as an export of source %s; choose another name or folder\n", src.ID)
 					return 1
 				}
 			}
 		}
-		snap, _, err := cfg.Read(ctx, r, src, true)
+		snap, _, err := cfg.Read(ctx, r, src, time.Now(), true)
 		if err != nil {
 			fmt.Fprintf(stderr, "aftermarket: source %s: %v; nothing was written\n", src.ID, err)
 			return 1
@@ -227,16 +227,14 @@ func runBridge(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "aftermarket: %v\n", err)
 		return 1
 	}
-	probs := srv.LoadAll(ctx)
 	fmt.Fprintf(stdout, "aftermarket bridge %s: http://%s, %d source(s), %d endpoint(s)\n", version.Version, ln.Addr(), len(cfg.Sources), len(cfg.Endpoints))
-	for _, s := range cfg.Sources {
-		if err := probs[s.ID]; err != nil {
-			fmt.Fprintf(stdout, "  source %s: not served yet: %v\n", s.ID, err)
-		}
-	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go srv.Watch(ctx)
+	// Answer at once: sources still settling answer 503 until they're read.
+	go func() {
+		srv.LoadAll(ctx)
+		srv.Watch(ctx)
+	}()
 	hs := &http.Server{Handler: srv, ReadHeaderTimeout: 30 * time.Second, ReadTimeout: time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(ln) }()

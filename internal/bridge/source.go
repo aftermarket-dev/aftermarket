@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,7 +61,41 @@ func (c Cell) Text() string {
 	return ""
 }
 
-func formatFloat(f float64) string { return strconv.FormatFloat(f, 'g', -1, 64) }
+func formatFloat(f float64) string {
+	if f == 0 {
+		return "0"
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+var numberPattern = regexp.MustCompile(`^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$`)
+
+// parseNumber reads a decimal number as written in a CSV file or a URL:
+// digits, a point and an exponent, nothing Go-specific (hex, underscores,
+// Inf, NaN). A number too big for a float, or too small to tell from zero,
+// is refused rather than changed.
+func parseNumber(v string) (float64, bool) {
+	if !numberPattern.MatchString(v) {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		return 0, false
+	}
+	if f == 0 && strings.ContainsAny(strings.SplitN(strings.ToLower(v), "e", 2)[0], "123456789") {
+		return 0, false
+	}
+	return f, true
+}
+
+// parseInt reads a decimal whole number: an optional sign and digits.
+func parseInt(v string) (int64, bool) {
+	if v == "" || strings.ContainsAny(v[1:], "+-") || strings.Trim(v, "+-0123456789") != "" {
+		return 0, false
+	}
+	i, err := strconv.ParseInt(v, 10, 64)
+	return i, err == nil
+}
 
 func mkStr(s string) Cell {
 	b, _ := json.Marshal(s)
@@ -67,6 +103,9 @@ func mkStr(s string) Cell {
 }
 func mkInt(i int64) Cell { return Cell{Kind: Int, I: i, JSON: []byte(strconv.FormatInt(i, 10))} }
 func mkFloat(f float64) Cell {
+	if f == 0 {
+		f = 0 // -0 reads as 0, as SQLite and filters treat them
+	}
 	t := formatFloat(f)
 	if !strings.ContainsAny(t, ".eE") {
 		t += ".0"
@@ -135,7 +174,7 @@ func (c *Config) fingerprint(s *Source) (string, string, error) {
 		if !st.Mode().IsRegular() {
 			return "", "", fmt.Errorf("%s is not a regular file", filepath.Base(f))
 		}
-		fmt.Fprintf(&b, "%s|%d|%d;", f, st.Size(), st.ModTime().UnixNano())
+		fmt.Fprintf(&b, "%s|%d|%d|%s;", f, st.Size(), st.ModTime().UnixNano(), fileID(st))
 	}
 	return b.String(), files[0], nil
 }
@@ -207,42 +246,62 @@ func (e *Endpoint) FieldColumn(name string) string {
 	return name
 }
 
-// ErrNotSettled means a CSV file changed too recently to be read: it may
+// ErrNotSettled means a file changed too recently to be read: it may
 // still be being written.
 var ErrNotSettled = errors.New("the file changed less than settle ago; it may still be being written")
 
-// Read reads a source into a snapshot. A CSV file is read only once it
-// has been left alone for the config's settle time, and refused if it
-// changes while being read or within settle after; a SQLite database is
-// read in one transaction, which is consistent by itself. wait says
-// whether to wait for a CSV file to settle (true) or return ErrNotSettled.
-func (c *Config) Read(ctx context.Context, r *sqlitecli.Runner, s *Source, wait bool) (*Snapshot, string, error) {
+// fileBased reports whether a source is a file written by the app, which
+// may be caught half written: a CSV file or a .sql dump. A database file is
+// read by SQLite in one consistent state and needs no settle time.
+func (s *Source) fileBased() bool {
+	return s.IsCSV() || sqlitecli.SourceOf(s.DB).SQL
+}
+
+// Read reads a source into a snapshot. A CSV file or .sql dump is read
+// only once it has been left alone for the config's settle time: counted
+// from firstSeen (when the bridge first saw the file as it is now, on its
+// own clock), or from the file's modification time when that is older and
+// not in the future. With wait, Read waits for the file to settle, giving
+// up if it keeps changing; without, it returns ErrNotSettled.
+func (c *Config) Read(ctx context.Context, r *sqlitecli.Runner, s *Source, firstSeen time.Time, wait bool) (*Snapshot, string, error) {
 	fp, file, err := c.fingerprint(s)
 	if err != nil {
 		return nil, "", err
 	}
-	settle := time.Duration(0)
-	if s.IsCSV() {
-		settle = c.Settle
-		st, err := os.Stat(file)
-		if err != nil {
-			return nil, fp, err
-		}
-		if quiet := time.Since(st.ModTime()); quiet < settle {
+	check := time.Duration(0)
+	if s.fileBased() {
+		started := time.Now()
+		for {
+			age := time.Since(firstSeen)
+			if st, err := os.Stat(file); err == nil {
+				if m := time.Since(st.ModTime()); m >= 0 && m > age {
+					age = m
+				}
+			}
+			if age >= c.Settle {
+				break
+			}
 			if !wait {
 				return nil, fp, ErrNotSettled
+			}
+			if time.Since(started) > 3*c.Settle+5*time.Second {
+				return nil, fp, errors.New("the file kept changing; it is still being written")
 			}
 			select {
 			case <-ctx.Done():
 				return nil, fp, ctx.Err()
-			case <-time.After(settle - quiet):
+			case <-time.After(min(c.Settle-age, 100*time.Millisecond)):
 			}
-			if again, _, err := c.fingerprint(s); err != nil || again != fp {
-				return nil, fp, errors.New("the file is still changing")
+			again, againFile, err := c.fingerprint(s)
+			if err != nil {
+				return nil, fp, err
+			}
+			if again != fp {
+				fp, file, firstSeen = again, againFile, time.Now()
 			}
 		}
 		// After reading, look again a short while later.
-		settle = min(settle, 100*time.Millisecond)
+		check = min(c.Settle, 100*time.Millisecond)
 	}
 	var snap *Snapshot
 	if s.IsCSV() {
@@ -253,11 +312,11 @@ func (c *Config) Read(ctx context.Context, r *sqlitecli.Runner, s *Source, wait 
 	if err != nil {
 		return nil, fp, err
 	}
-	if settle > 0 {
+	if check > 0 {
 		select {
 		case <-ctx.Done():
 			return nil, fp, ctx.Err()
-		case <-time.After(settle):
+		case <-time.After(check):
 		}
 	}
 	if again, _, err := c.fingerprint(s); err != nil || again != fp {
@@ -269,6 +328,44 @@ func (c *Config) Read(ctx context.Context, r *sqlitecli.Runner, s *Source, wait 
 		return nil, fp, err
 	}
 	return snap, fp, nil
+}
+
+// checkDump refuses a .sql dump that was cut off: one that doesn't end
+// with a line break, or that opens a transaction it never commits (as
+// sqlite3's .dump does), since the rows inserted so far would read as the
+// whole table.
+func checkDump(path string, max int64) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > max {
+		return fmt.Errorf("the file is over max_file (%d bytes)", max)
+	}
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		return errors.New("the dump doesn't end with a line break; it is still being written")
+	}
+	stmts, err := sqlitecli.Split(string(data))
+	if err != nil {
+		return err
+	}
+	open := false
+	for _, st := range stmts {
+		w := strings.Fields(strings.ToUpper(st.SQL))
+		if len(w) == 0 {
+			continue
+		}
+		switch w[0] {
+		case "BEGIN":
+			open = true
+		case "COMMIT", "END", "ROLLBACK":
+			open = false
+		}
+	}
+	if open {
+		return errors.New("the dump starts a transaction it never commits; it is still being written")
+	}
+	return nil
 }
 
 // finish checks the columns the config needs and builds the key index.
@@ -425,14 +522,14 @@ func typed(v string, t Type) (Cell, error) {
 	}
 	switch t {
 	case Integer:
-		i, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		i, ok := parseInt(v)
+		if !ok {
 			return Cell{}, errors.New("not a whole number")
 		}
 		return mkInt(i), nil
 	case Number:
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		f, ok := parseNumber(v)
+		if !ok {
 			return Cell{}, errors.New("not a number")
 		}
 		return mkFloat(f), nil
@@ -463,13 +560,18 @@ const viewName = `"aftermarket_bridge"`
 // pairs, with reals written to 17 digits so no precision is lost.
 func (c *Config) readSQLite(ctx context.Context, r *sqlitecli.Runner, s *Source) (*Snapshot, error) {
 	src := sqlitecli.SourceOf(s.DB)
+	if src.SQL {
+		if err := checkDump(s.DB, c.MaxFile); err != nil {
+			return nil, err
+		}
+	}
 	setup, from, colQuery := "", schema.Quote(s.Table), ""
 	if s.Query != "" {
 		setup = "CREATE TEMP VIEW " + viewName + " AS " + s.Query
 		from = viewName
-		colQuery = "SELECT name FROM pragma_table_info('aftermarket_bridge') ORDER BY cid"
+		colQuery = "SELECT name, (SELECT encoding FROM pragma_encoding) AS enc FROM pragma_table_info('aftermarket_bridge') ORDER BY cid"
 	} else {
-		colQuery = "SELECT name FROM pragma_table_xinfo(" + sqlString(s.Table) + ") WHERE hidden <> 1 ORDER BY cid"
+		colQuery = "SELECT name, (SELECT encoding FROM pragma_encoding) AS enc FROM pragma_table_xinfo(" + sqlString(s.Table) + ") WHERE hidden <> 1 ORDER BY cid"
 	}
 	rows, err := r.Query(ctx, src, setup, colQuery)
 	if err != nil {
@@ -477,6 +579,9 @@ func (c *Config) readSQLite(ctx context.Context, r *sqlitecli.Runner, s *Source)
 	}
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("no table called %s", s.Table)
+	}
+	if enc := sqlitecli.Str(rows[0].Get("enc")); enc != "UTF-8" {
+		return nil, fmt.Errorf("the database stores text as %s; only UTF-8 databases are read", enc)
 	}
 	snap := &Snapshot{}
 	seen := map[string]bool{}
@@ -492,7 +597,9 @@ func (c *Config) readSQLite(ctx context.Context, r *sqlitecli.Runner, s *Source)
 		}
 		snap.Columns = append(snap.Columns, n)
 		q := schema.Quote(n)
-		parts = append(parts, fmt.Sprintf("typeof(%s), CASE WHEN typeof(%s) = 'real' THEN printf('%%!.17g', %s) ELSE %s END", q, q, q, q))
+		// Reals to 17 digits, so none is lost; text as hex, since the
+		// shell's JSON mode mangles bytes that aren't UTF-8.
+		parts = append(parts, fmt.Sprintf("typeof(%s), CASE typeof(%s) WHEN 'real' THEN printf('%%!.17g', %s) WHEN 'text' THEN hex(%s) ELSE %s END", q, q, q, q, q))
 	}
 	for _, ct := range s.Columns {
 		if !seen[ct.Name] && !s.Exclude[ct.Name] {
@@ -566,11 +673,18 @@ func sqliteCell(typ string, raw json.RawMessage, t Type) (Cell, error) {
 		}
 		cell = mkFloat(f)
 	case "text":
-		var txt string
-		if err := json.Unmarshal(raw, &txt); err != nil {
+		var h string
+		if err := json.Unmarshal(raw, &h); err != nil {
 			return Cell{}, errors.New("sqlite3 gave text that can't be read")
 		}
-		cell = mkStr(txt)
+		b, err := hex.DecodeString(h)
+		if err != nil {
+			return Cell{}, errors.New("sqlite3 gave text that can't be read")
+		}
+		if !utf8.Valid(b) {
+			return Cell{}, errors.New("text that isn't valid UTF-8")
+		}
+		cell = mkStr(string(b))
 	case "blob":
 		return Cell{}, errors.New("holds a blob, which JSON can't carry; exclude the column")
 	default:
@@ -590,6 +704,9 @@ func sqliteCell(typ string, raw json.RawMessage, t Type) (Cell, error) {
 	case Number:
 		switch cell.Kind {
 		case Int:
+			if f := float64(cell.I); f >= 1<<63 || int64(f) != cell.I {
+				return Cell{}, errors.New("a whole number too big to be a number without changing; declare it integer")
+			}
 			return mkFloat(float64(cell.I)), nil
 		case Float:
 		default:
@@ -617,11 +734,11 @@ func sqliteCell(typ string, raw json.RawMessage, t Type) (Cell, error) {
 func Match(cell Cell, v string, t Type) (match, bad bool) {
 	switch t {
 	case Integer:
-		if _, err := strconv.ParseInt(v, 10, 64); err != nil {
+		if _, ok := parseInt(v); !ok {
 			return false, true
 		}
 	case Number:
-		if f, err := strconv.ParseFloat(v, 64); err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		if _, ok := parseNumber(v); !ok {
 			return false, true
 		}
 	case Boolean:
@@ -637,11 +754,11 @@ func Match(cell Cell, v string, t Type) (match, bad bool) {
 	case Str:
 		return cell.S == v, false
 	case Int:
-		i, err := strconv.ParseInt(v, 10, 64)
-		return err == nil && i == cell.I, false
+		i, ok := parseInt(v)
+		return ok && i == cell.I, false
 	case Float:
-		f, err := strconv.ParseFloat(v, 64)
-		return err == nil && f == cell.F, false
+		f, ok := parseNumber(v)
+		return ok && f == cell.F, false
 	case Bool:
 		b, err := parseBool(v)
 		return err == nil && b == cell.B, false
@@ -665,14 +782,14 @@ func parseBool(v string) (bool, error) {
 func KeyText(v string, t Type) (string, bool) {
 	switch t {
 	case Integer:
-		i, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
+		i, ok := parseInt(v)
+		if !ok {
 			return "", false
 		}
 		return strconv.FormatInt(i, 10), true
 	case Number:
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+		f, ok := parseNumber(v)
+		if !ok {
 			return "", false
 		}
 		return formatFloat(f), true

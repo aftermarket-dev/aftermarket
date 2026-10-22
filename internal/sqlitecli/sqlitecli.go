@@ -77,7 +77,7 @@ func (r *Runner) available() error {
 		return fmt.Errorf("running %s -version: %w", r.Bin, err)
 	}
 	if v := strings.Fields(string(res.Stdout)); len(v) == 0 || !newEnough(v[0]) {
-		return fmt.Errorf("%s is too old: AfterSchema needs sqlite3 3.37 or later (it says %q)", r.Bin, strings.TrimSpace(string(res.Stdout)))
+		return fmt.Errorf("%s is too old: Aftermarket needs sqlite3 3.37 or later (it says %q)", r.Bin, strings.TrimSpace(string(res.Stdout)))
 	}
 	return nil
 }
