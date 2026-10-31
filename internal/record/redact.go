@@ -98,3 +98,14 @@ func redactAt(v any, p []string) (any, int) {
 	}
 	return v, n
 }
+
+// RedactURI returns an escaped path and query with the values of the
+// config's query keys replaced, as a fixture would store them.
+func (c *Config) RedactURI(uri string) string {
+	if p, q, ok := strings.Cut(uri, "?"); ok {
+		if nq, changed := redactQuery(q, c.RedactQuery); changed {
+			return p + "?" + nq
+		}
+	}
+	return uri
+}

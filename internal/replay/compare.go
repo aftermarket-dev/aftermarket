@@ -46,11 +46,11 @@ func (p Pattern) matches(path []string) bool {
 // compareBodies compares two bodies. JSON is compared by meaning: key order,
 // spacing and the way a number is written don't count. Anything else is
 // compared byte for byte.
-func compareBodies(a, b []byte, ignore []Pattern) []string {
+func compareBodies(a, b []byte, ignore, mask []Pattern) []string {
 	av, aok := parseJSON(a)
 	bv, bok := parseJSON(b)
 	if aok && bok {
-		d := &differ{ignore: ignore}
+		d := &differ{ignore: ignore, mask: mask}
 		d.walk(nil, av, bv)
 		if d.more > 0 {
 			d.out = append(d.out, fmt.Sprintf("and %d more", d.more))
@@ -93,6 +93,7 @@ func parseJSON(b []byte) (any, bool) {
 
 type differ struct {
 	ignore []Pattern
+	mask   []Pattern // values here are never shown
 	out    []string
 	more   int
 }
@@ -114,8 +115,26 @@ func (d *differ) ignored(path []string) bool {
 	return false
 }
 
+func (d *differ) masked(path []string) bool {
+	for _, p := range d.mask {
+		if p.matches(path) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *differ) walk(path []string, a, b any) {
 	if d.ignored(path) {
+		return
+	}
+	if d.masked(path) {
+		// Compare without showing anything: one line if anything inside differs.
+		sub := &differ{ignore: d.ignore}
+		sub.walk(path, a, b)
+		if len(sub.out) > 0 {
+			d.add(path, "differs (REDACTED)")
+		}
 		return
 	}
 	switch x := a.(type) {
@@ -143,6 +162,10 @@ func (d *differ) walk(path []string, a, b any) {
 			bv, inb := y[k]
 			switch {
 			case d.ignored(p):
+			case !inb && d.masked(p):
+				d.add(p, "only in A (REDACTED)")
+			case !ina && d.masked(p):
+				d.add(p, "only in B (REDACTED)")
 			case !inb:
 				d.add(p, "only in A (%s)", show(av))
 			case !ina:

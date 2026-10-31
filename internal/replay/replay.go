@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,16 +65,67 @@ type Report struct {
 	Cases    []CaseReport `json:"cases"`
 	Ignored  []string     `json:"ignored,omitempty"`
 	Compared []string     `json:"headers_compared"`
+	// Shadow holds the counts of a live run (aftermarket shadow), where A is
+	// the primary and B the candidate. It is nil for a replay.
+	Shadow *ShadowStats `json:"shadow,omitempty"`
+}
+
+// ShadowStats are the counts of a live shadow run. Only cases with a
+// difference or an error are listed in Cases; the counts cover every case.
+type ShadowStats struct {
+	Requests         int64            `json:"requests"`           // requests served from the primary (health checks not counted)
+	Mirrored         int64            `json:"mirrored"`           // queued for the candidate
+	SampledOut       int64            `json:"sampled_out"`        // left out by --sample
+	WritesNotSent    int64            `json:"writes_not_sent"`    // methods other than GET and HEAD, without --include-writes
+	Dropped          int64            `json:"dropped_queue_full"` // the queue was full, so the copy was dropped
+	NotMirrored      int64            `json:"not_mirrored"`       // matched but couldn't be compared safely (see reasons)
+	NotCompared      int64            `json:"not_compared"`       // copied, but the primary's answer couldn't be compared (see reasons)
+	NotMirroredWhy   map[string]int64 `json:"not_mirrored_reasons,omitempty"`
+	Unfinished       int64            `json:"unfinished_at_stop"` // still queued when shadow stopped
+	NotListed        int64            `json:"cases_not_listed"`   // differences and errors beyond the listing limit
+	Sample           float64          `json:"sample"`
+	Queue            int              `json:"queue"`
+	Workers          int              `json:"workers"`
+	CandidateTimeout string           `json:"candidate_timeout"`
+	Started          string           `json:"started"`
+	Updated          string           `json:"updated"`
 }
 
 // OK reports whether every case that ran gave the same answer on both
 // sides. A replay that compared nothing is not OK: it proves nothing.
 func (r *Report) OK() bool { return r.Diff == 0 && r.Errors == 0 && r.Same > 0 }
 
-type answer struct {
-	status int
-	header http.Header
-	body   []byte
+// Answer is one service's answer to a request: the status, the headers and
+// the body (decoded when the transport asked for gzip itself).
+type Answer struct {
+	Status int
+	Header http.Header
+	Body   []byte
+}
+
+// Request is a request to send with Send: the method, the escaped path and
+// raw query as the client sent it, the headers and the body.
+type Request struct {
+	Method string
+	URI    string
+	Header http.Header
+	Body   []byte
+}
+
+// NewClient returns the client replay sends with: no redirects followed,
+// gzip answers decoded, a timeout per answer. tr nil means a default
+// transport.
+func NewClient(timeout time.Duration, tr http.RoundTripper) *http.Client {
+	if tr == nil {
+		t := httpx.NewTransport(timeout)
+		t.DisableCompression = false // gzip answers are compared decoded
+		tr = t
+	}
+	return &http.Client{
+		Transport:     tr,
+		Timeout:       timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 // Run replays every case in order.
@@ -102,17 +154,7 @@ func Run(ctx context.Context, f *fixture.Fixture, o Options) (*Report, error) {
 	for i, h := range headers {
 		headers[i] = textproto.CanonicalMIMEHeaderKey(h)
 	}
-	tr := o.Transport
-	if tr == nil {
-		t := httpx.NewTransport(o.Timeout)
-		t.DisableCompression = false // gzip answers are compared decoded
-		tr = t
-	}
-	client := &http.Client{
-		Transport:     tr,
-		Timeout:       o.Timeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	client := NewClient(o.Timeout, o.Transport)
 	rep := &Report{A: httpx.SafeURL(o.A), B: "recorded responses", Compared: headers}
 	if o.B != nil {
 		rep.B = httpx.SafeURL(o.B)
@@ -146,44 +188,36 @@ func Run(ctx context.Context, f *fixture.Fixture, o Options) (*Report, error) {
 }
 
 func replayCase(ctx context.Context, client *http.Client, o Options, headers []string, c fixture.Case, cr *CaseReport) {
-	a, err := send(ctx, client, o, o.A, c)
+	req := caseRequest(c)
+	a, err := Send(ctx, client, o.A, req, o.SetHeaders, o.MaxBody)
 	if err != nil {
 		cr.Outcome, cr.Reason = Failed, "A: "+err.Error()
 		return
 	}
-	var b *answer
+	var b *Answer
 	if o.B != nil {
-		b, err = send(ctx, client, o, o.B, c)
+		b, err = Send(ctx, client, o.B, req, o.SetHeaders, o.MaxBody)
 		if err != nil {
 			cr.Outcome, cr.Reason = Failed, "B: "+err.Error()
 			return
 		}
 	} else {
 		e := c.ExpectResponse
-		b = &answer{status: e.Status, header: http.Header{}}
+		b = &Answer{Status: e.Status, Header: http.Header{}}
 		for _, h := range e.Headers {
-			b.header.Add(h[0], h[1])
+			b.Header.Add(h[0], h[1])
 		}
 		if e.Body != nil {
-			b.body = []byte(*e.Body)
+			b.Body = []byte(*e.Body)
 		}
 	}
-	cr.StatusA, cr.StatusB = a.status, b.status
+	cr.StatusA, cr.StatusB = a.Status, b.Status
+	cmp := Comparison{Headers: headers, Ignore: o.Ignore}
 	var diffs []string
-	if b.status != 0 && a.status != b.status {
-		diffs = append(diffs, fmt.Sprintf("status: %d vs %d", a.status, b.status))
-	}
-	for _, h := range headers {
-		if o.B == nil && len(b.header.Values(h)) == 0 {
-			continue // not recorded
-		}
-		av, bv := strings.Join(a.header.Values(h), ", "), strings.Join(b.header.Values(h), ", ")
-		if av != bv {
-			diffs = append(diffs, fmt.Sprintf("header %s: %q vs %q", h, av, bv))
-		}
-	}
-	if o.B != nil || c.ExpectResponse.Body != nil {
-		diffs = append(diffs, compareBodies(a.body, b.body, o.Ignore)...)
+	if o.B != nil {
+		diffs = cmp.Compare(a, b)
+	} else {
+		diffs = cmp.compare(a, b, true, c.ExpectResponse.Body != nil)
 	}
 	cr.Diffs = diffs
 	cr.Outcome = Same
@@ -192,33 +226,94 @@ func replayCase(ctx context.Context, client *http.Client, o Options, headers []s
 	}
 }
 
-// send replays the case's request against base.
-func send(ctx context.Context, client *http.Client, o Options, base *url.URL, c fixture.Case) (*answer, error) {
-	path, query, _ := strings.Cut(c.Request.Path, "?")
+// Comparison says what Compare looks at.
+type Comparison struct {
+	Headers []string  // canonical names of the response headers to compare
+	Ignore  []Pattern // JSON paths left out
+	// MaskHeaders and MaskJSON name values that must never be shown: a
+	// difference there is reported without the values.
+	MaskHeaders map[string]bool
+	MaskJSON    []Pattern
+}
+
+// Compare lists the differences between two answers: status, the chosen
+// headers and the bodies (JSON by meaning). No differences means the same.
+func (c Comparison) Compare(a, b *Answer) []string { return c.compare(a, b, false, true) }
+
+// compare with recorded set compares a live answer with a recorded one:
+// status 0 and headers that weren't recorded are not compared, and the body
+// only when one was recorded.
+func (c Comparison) compare(a, b *Answer, recorded, bodies bool) []string {
+	var diffs []string
+	if b.Status != 0 && a.Status != b.Status {
+		diffs = append(diffs, fmt.Sprintf("status: %d vs %d", a.Status, b.Status))
+	}
+	for _, h := range c.Headers {
+		if recorded && len(b.Header.Values(h)) == 0 {
+			continue // not recorded
+		}
+		av, bv := strings.Join(a.Header.Values(h), ", "), strings.Join(b.Header.Values(h), ", ")
+		if av == bv {
+			continue
+		}
+		if c.MaskHeaders[h] {
+			diffs = append(diffs, fmt.Sprintf("header %s: differs (REDACTED)", h))
+		} else {
+			diffs = append(diffs, fmt.Sprintf("header %s: %q vs %q", h, av, bv))
+		}
+	}
+	if bodies {
+		diffs = append(diffs, compareBodies(a.Body, b.Body, c.Ignore, c.MaskJSON)...)
+	}
+	return diffs
+}
+
+func caseRequest(c fixture.Case) Request {
+	r := Request{Method: c.Request.Method, URI: c.Request.Path, Header: http.Header{}}
+	for _, h := range c.Request.Headers {
+		r.Header.Add(h[0], h[1])
+	}
+	if c.Request.Body != nil {
+		r.Body = []byte(*c.Request.Body)
+	}
+	return r
+}
+
+// Send sends r to base the way replay does: base's path is put in front of
+// the request's, its query joined, and connection, length and encoding
+// headers left for the client to set. setHeaders replace headers of the same
+// name. Errors are described in fixed words, without URLs or values.
+func Send(ctx context.Context, client *http.Client, base *url.URL, r Request, setHeaders [][2]string, maxBody int64) (*Answer, error) {
+	if maxBody <= 0 {
+		maxBody = 16 << 20
+	}
+	path, query, _ := strings.Cut(r.URI, "?")
 	u := *base
 	u.RawPath = ""
 	u.Path = ""
 	target := strings.TrimSuffix(base.EscapedPath(), "/") + path
 	var body io.Reader
-	if c.Request.Body != nil && *c.Request.Body != "" {
-		body = strings.NewReader(*c.Request.Body)
+	if len(r.Body) > 0 {
+		body = bytes.NewReader(r.Body)
 	}
 	raw := u.Scheme + "://" + u.Host + target
 	if q := joinQuery(base.RawQuery, query); q != "" {
 		raw += "?" + q
 	}
-	req, err := http.NewRequestWithContext(ctx, c.Request.Method, raw, body)
+	req, err := http.NewRequestWithContext(ctx, r.Method, raw, body)
 	if err != nil {
 		return nil, errors.New("the recorded request could not be built")
 	}
-	for _, h := range c.Request.Headers {
-		switch textproto.CanonicalMIMEHeaderKey(h[0]) {
+	for k, vs := range r.Header {
+		switch textproto.CanonicalMIMEHeaderKey(k) {
 		case "Host", "Content-Length", "Accept-Encoding", "Connection", "Transfer-Encoding":
 			continue
 		}
-		req.Header.Add(h[0], h[1])
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
-	for _, h := range o.SetHeaders {
+	for _, h := range setHeaders {
 		req.Header.Set(h[0], h[1])
 	}
 	resp, err := client.Do(req)
@@ -226,14 +321,14 @@ func send(ctx context.Context, client *http.Client, o Options, base *url.URL, c 
 		return nil, errors.New(describe(err))
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, o.MaxBody+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return nil, errors.New("the answer could not be read: " + describe(err))
 	}
-	if int64(len(data)) > o.MaxBody {
-		return nil, fmt.Errorf("the answer is larger than %d bytes", o.MaxBody)
+	if int64(len(data)) > maxBody {
+		return nil, fmt.Errorf("the answer is larger than %d bytes", maxBody)
 	}
-	return &answer{status: resp.StatusCode, header: resp.Header, body: data}, nil
+	return &Answer{Status: resp.StatusCode, Header: resp.Header, Body: data}, nil
 }
 
 func joinQuery(a, b string) string {
@@ -274,14 +369,43 @@ func (r *Report) WriteJSON(w io.Writer) error {
 // WriteMarkdown writes the report for people to read.
 func (r *Report) WriteMarkdown(w io.Writer) error {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "# Replay report\n\n")
-	fmt.Fprintf(&b, "- A: %s\n- B: %s\n", r.A, r.B)
+	if r.Shadow != nil {
+		fmt.Fprintf(&b, "# Shadow report\n\n")
+		fmt.Fprintf(&b, "- A (primary, answers clients): %s\n- B (candidate, gets copies): %s\n", r.A, r.B)
+	} else {
+		fmt.Fprintf(&b, "# Replay report\n\n")
+		fmt.Fprintf(&b, "- A: %s\n- B: %s\n", r.A, r.B)
+	}
 	fmt.Fprintf(&b, "- Headers compared: %s\n", strings.Join(r.Compared, ", "))
 	if len(r.Ignored) > 0 {
 		fmt.Fprintf(&b, "- Ignored: %s\n", strings.Join(r.Ignored, ", "))
 	}
 	fmt.Fprintf(&b, "\n%s\n", r.Summary())
-	if r.Same+r.Diff+r.Errors == 0 {
+	if s := r.Shadow; s != nil {
+		fmt.Fprintf(&b, "\n## Traffic\n\n")
+		fmt.Fprintf(&b, "- Started %s, updated %s\n", s.Started, s.Updated)
+		fmt.Fprintf(&b, "- %d request(s) served from A; %d copied to B\n", s.Requests, s.Mirrored)
+		fmt.Fprintf(&b, "- Not copied: %d left out by sampling (%g), %d writes without --include-writes, %d dropped because the queue (%d) was full, %d that couldn't be compared safely\n",
+			s.SampledOut, s.Sample, s.WritesNotSent, s.Dropped, s.Queue, s.NotMirrored)
+		if s.NotCompared > 0 {
+			fmt.Fprintf(&b, "- Copied but not compared: %d (the primary's answer couldn't be read the way replay reads it)\n", s.NotCompared)
+		}
+		reasons := make([]string, 0, len(s.NotMirroredWhy))
+		for k := range s.NotMirroredWhy {
+			reasons = append(reasons, k)
+		}
+		sort.Strings(reasons)
+		for _, k := range reasons {
+			fmt.Fprintf(&b, "  - %s: %d\n", k, s.NotMirroredWhy[k])
+		}
+		if s.Unfinished > 0 {
+			fmt.Fprintf(&b, "- %d copy(ies) still queued at stop, not compared\n", s.Unfinished)
+		}
+		fmt.Fprintf(&b, "- %d worker(s), candidate timeout %s\n", s.Workers, s.CandidateTimeout)
+		if s.NotListed > 0 {
+			fmt.Fprintf(&b, "- %d more difference(s) or error(s) counted but not listed\n", s.NotListed)
+		}
+	} else if r.Same+r.Diff+r.Errors == 0 {
 		fmt.Fprintf(&b, "\nNothing was compared, so the replay proves nothing. Use --include-writes to send the skipped cases.\n")
 	}
 	if r.Diff+r.Errors > 0 {
@@ -315,5 +439,5 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 // Summary is one line with the counts.
 func (r *Report) Summary() string {
 	return fmt.Sprintf("%d case(s): %d same, %d different, %d skipped, %d error(s)",
-		len(r.Cases), r.Same, r.Diff, r.Skipped, r.Errors)
+		r.Same+r.Diff+r.Skipped+r.Errors, r.Same, r.Diff, r.Skipped, r.Errors)
 }

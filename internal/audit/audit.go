@@ -23,6 +23,7 @@ const (
 	Unchanged     = "unchanged"      // the rule matched but nothing needed changing
 	UpstreamError = "upstream_error" // forwarding failed (the upstream, or the client's body: 400, 408); the proxy answered itself
 	Recorded      = "recorded"       // record: the exchange was written to the fixture file
+	Compared      = "compared"       // shadow: the candidate's answer was compared; Reason says same, different or error
 )
 
 // Event is one audit record.

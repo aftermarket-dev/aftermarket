@@ -30,6 +30,33 @@ type Options struct {
 	Audit      *audit.Log
 	HealthPath string            // "" disables the health check
 	Transport  http.RoundTripper // nil for a default transport with the config's timeout
+
+	// Select, when set, is asked about each request that matches when:.
+	// Returning false lets the request pass through without being kept.
+	Select func(*http.Request) bool
+	// Mirror, when set, receives each finished exchange instead of having it
+	// redacted and written, and Out is not used. The exchange is raw: nothing
+	// is redacted or decoded. Mirror runs on the request's goroutine just
+	// before the last bytes of the answer go to the client, so it must
+	// return at once.
+	Mirror func(*Exchange)
+	// Skipped, when set, is told the reason each time an exchange that
+	// matched can't be kept. The audit log gets the same event.
+	Skipped func(reason string)
+}
+
+// Exchange is one finished request and answer, as Mirror receives it.
+type Exchange struct {
+	ID         uint64
+	Method     string
+	URI        string // escaped path and raw query, as the client sent them
+	Path       string // decoded path, for logs
+	QueryKeys  []string
+	Header     http.Header // request headers as received
+	Body       []byte      // the whole request body
+	Status     int
+	RespHeader http.Header
+	RespBody   []byte // the whole answer body, still encoded (gzip and so on)
 }
 
 // Recorder is the `aftermarket record` HTTP handler.
@@ -66,12 +93,15 @@ func New(opts Options) (*Recorder, error) {
 	if opts.Config == nil {
 		opts.Config = Default()
 	}
-	if opts.Out == nil {
-		return nil, errors.New("no fixture file to write to")
-	}
-	cw, err := newCaseWriter(opts.Out, httpx.SafeURL(opts.Upstream), opts.Config.MaxCases)
-	if err != nil {
-		return nil, err
+	cw := &caseWriter{}
+	if opts.Mirror == nil {
+		if opts.Out == nil {
+			return nil, errors.New("no fixture file to write to")
+		}
+		var err error
+		if cw, err = newCaseWriter(opts.Out, httpx.SafeURL(opts.Upstream), opts.Config.MaxCases); err != nil {
+			return nil, err
+		}
 	}
 	r := &Recorder{opts: opts, out: cw}
 	tr := opts.Transport
@@ -126,6 +156,9 @@ func (r *Recorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	w2 := r.opts.Config.When
 	candidate := !(w2.PathGlob != "" && httpx.UnsafePath(req.URL)) &&
 		w2.MatchRequest(req.Method, req.URL.Path, query, req.Header)
+	if candidate && r.opts.Select != nil && !r.opts.Select(req) {
+		candidate = false
+	}
 	if candidate && r.out.full() {
 		r.skip(ex, 0, "max_cases reached")
 	} else if candidate {
@@ -210,6 +243,9 @@ func (r *Recorder) errorHandler(w http.ResponseWriter, req *http.Request, err er
 }
 
 func (r *Recorder) skip(ex *exchange, status int, reason string) {
+	if r.opts.Skipped != nil {
+		r.opts.Skipped(reason)
+	}
 	r.opts.Audit.Write(audit.Event{
 		Event:     audit.Skipped,
 		Request:   ex.id,
@@ -226,6 +262,7 @@ func (r *Recorder) skip(ex *exchange, status int, reason string) {
 func (r *Recorder) finish(ex *exchange, status int, respHdr http.Header, resp *tap, complete bool) {
 	cfg := r.opts.Config
 	reqBody := ""
+	var reqRaw []byte
 	if ex.reqTap != nil {
 		data, over, eof := ex.reqTap.result()
 		if ex.reqLen > 0 && int64(len(data)) == ex.reqLen {
@@ -239,12 +276,15 @@ func (r *Recorder) finish(ex *exchange, status int, respHdr http.Header, resp *t
 			r.skip(ex, status, "request body was not read to the end")
 			return
 		}
-		b, why := decode(data, ex.header.Get("Content-Encoding"), cfg.MaxBody)
-		if why != "" {
-			r.skip(ex, status, "request "+why)
-			return
+		reqRaw = data
+		if r.opts.Mirror == nil {
+			b, why := decode(data, ex.header.Get("Content-Encoding"), cfg.MaxBody)
+			if why != "" {
+				r.skip(ex, status, "request "+why)
+				return
+			}
+			reqBody = b
 		}
-		reqBody = b
 	}
 	data, over, _ := resp.result()
 	switch {
@@ -253,6 +293,11 @@ func (r *Recorder) finish(ex *exchange, status int, respHdr http.Header, resp *t
 		return
 	case !complete:
 		r.skip(ex, status, "response body was cut off")
+		return
+	}
+	if r.opts.Mirror != nil {
+		r.opts.Mirror(&Exchange{ID: ex.id, Method: ex.method, URI: ex.uri, Path: ex.path, QueryKeys: ex.queryKeys,
+			Header: ex.header, Body: reqRaw, Status: status, RespHeader: respHdr, RespBody: data})
 		return
 	}
 	respBody, why := decode(data, respHdr.Get("Content-Encoding"), cfg.MaxBody)
