@@ -149,6 +149,10 @@ Design decisions:
 ### Later, decided with the owner at the time
 Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
+## In progress: independent review of shadow mode (Oct 31 2026)
+
+Scope: `aftermarket shadow` (internal/shadow, record's Mirror hook in internal/record/proxy.go, replay.Send/Compare, cmd/aftermarket/shadow.go, docs/record.md shadow section, customer-api shadow test, release smoke). Checks: primary bytes unchanged (bodies, chunked, Expect, upgrades, early close), no blocking or latency from the candidate, queue and workers bounded with no leaks, data races between primary and copy, shutdown and final report, atomic report rewrite, sampling counter, redaction in report and logs, live vs replay comparison, method filtering, HEAD. Each suspected bug gets a failing test (race on) first. Resume: read this list, then `git log` for review commits.
+
 ## Status
 
 - Oct 19 2026: plan approved. Site cleaned and aligned with this plan. Repo initialised with LICENSE, NOTICE and this file.
