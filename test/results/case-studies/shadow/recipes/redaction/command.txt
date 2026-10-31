@@ -1,0 +1,1 @@
+aftermarket shadow --primary http://127.0.0.1:9301 --candidate http://127.0.0.1:9302 --listen 127.0.0.1:8390 --report report.md --json report.json --audit-log audit.jsonl --config examples/customer-api/record.yaml 

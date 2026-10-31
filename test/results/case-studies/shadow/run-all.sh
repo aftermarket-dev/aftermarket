@@ -8,3 +8,4 @@ WORK=${2:-$(mktemp -d)}
 "$HERE/datasette/run.sh" "$1" "$WORK/datasette"
 "$HERE/json-server/run.sh" "$1" "$WORK/json-server"
 "$HERE/load/run.sh" "$1" "$WORK/load"
+"$HERE/recipes/run.sh" "$1" "$WORK/recipes"

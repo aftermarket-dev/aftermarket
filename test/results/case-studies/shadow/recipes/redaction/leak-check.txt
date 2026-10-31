@@ -1,0 +1,4 @@
+occurrences of s3cret in report.md, report.json and audit.jsonl:
+0
+occurrences of @example in report.md, report.json and audit.jsonl:
+0

@@ -1,0 +1,267 @@
+{
+  "a": "http://127.0.0.1:9201",
+  "b": "http://127.0.0.1:9202",
+  "same": 0,
+  "different": 19,
+  "skipped": 0,
+  "errors": 0,
+  "cases": [
+    {
+      "name": "1 GET /posts",
+      "method": "GET",
+      "path": "/posts",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "2 GET /posts/1",
+      "method": "GET",
+      "path": "/posts/1",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "3 GET /posts",
+      "method": "GET",
+      "path": "/posts?authorId=1",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "4 GET /posts",
+      "method": "GET",
+      "path": "/posts?_sort=views&_order=desc",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "body: 6 items vs 0 items"
+      ]
+    },
+    {
+      "name": "5 GET /posts",
+      "method": "GET",
+      "path": "/posts?_page=1&_limit=2",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "body: a list vs an object"
+      ]
+    },
+    {
+      "name": "6 GET /posts",
+      "method": "GET",
+      "path": "/posts?title_like=report",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "body: 2 items vs 0 items"
+      ]
+    },
+    {
+      "name": "7 GET /posts/1/comments",
+      "method": "GET",
+      "path": "/posts/1/comments",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 404,
+      "differences": [
+        "status: 200 vs 404",
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "body: a list vs an object"
+      ]
+    },
+    {
+      "name": "8 GET /posts",
+      "method": "GET",
+      "path": "/posts?_embed=comments",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "0.comments: 2 items vs 0 items",
+        "2.comments: 1 items vs 0 items"
+      ]
+    },
+    {
+      "name": "9 GET /posts/99",
+      "method": "GET",
+      "path": "/posts/99",
+      "outcome": "different",
+      "status_a": 404,
+      "status_b": 404,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "error: only in B (\"Not Found\")"
+      ]
+    },
+    {
+      "name": "10 GET /profile",
+      "method": "GET",
+      "path": "/profile",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "11 POST /posts",
+      "method": "POST",
+      "path": "/posts",
+      "outcome": "different",
+      "status_a": 201,
+      "status_b": 201,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "12 PATCH /posts/2",
+      "method": "PATCH",
+      "path": "/posts/2",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "13 PUT /profile",
+      "method": "PUT",
+      "path": "/profile",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "14 DELETE /comments/3",
+      "method": "DELETE",
+      "path": "/comments/3",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "body: only in B (\"What about gzip?\")",
+        "postId: only in B (3)"
+      ]
+    },
+    {
+      "name": "15 GET /comments",
+      "method": "GET",
+      "path": "/comments",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\""
+      ]
+    },
+    {
+      "name": "16 GET /posts/7",
+      "method": "GET",
+      "path": "/posts/7",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 404,
+      "differences": [
+        "status: 200 vs 404",
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "authorId: only in A (2)",
+        "error: only in B (\"Not Found\")",
+        "title: only in A (\"Release notes for 2.0\")",
+        "views: only in A (0)"
+      ]
+    },
+    {
+      "name": "17 PATCH /posts/7",
+      "method": "PATCH",
+      "path": "/posts/7",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 404,
+      "differences": [
+        "status: 200 vs 404",
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "authorId: only in A (2)",
+        "error: only in B (\"Not Found\")",
+        "title: only in A (\"Release notes for 2.0\")",
+        "views: only in A (1)"
+      ]
+    },
+    {
+      "name": "18 DELETE /posts/7",
+      "method": "DELETE",
+      "path": "/posts/7",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 404,
+      "differences": [
+        "status: 200 vs 404",
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "error: only in B (\"Not Found\")"
+      ]
+    },
+    {
+      "name": "19 GET /posts",
+      "method": "GET",
+      "path": "/posts",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"application/json\"",
+        "body: 6 items vs 7 items"
+      ]
+    }
+  ],
+  "ignored": [
+    "id",
+    "*.id"
+  ],
+  "headers_compared": [
+    "Content-Type"
+  ],
+  "shadow": {
+    "requests": 19,
+    "outside_when": 0,
+    "mirrored": 19,
+    "sampled_out": 0,
+    "writes_not_sent": 0,
+    "dropped_queue_full": 0,
+    "not_mirrored": 0,
+    "not_compared": 0,
+    "unfinished_at_stop": 0,
+    "cases_not_listed": 0,
+    "sample": 1,
+    "queue": 64,
+    "workers": 1,
+    "candidate_timeout": "5s",
+    "started": "2026-10-31T10:28:20Z",
+    "updated": "2026-10-31T10:28:22Z"
+  }
+}

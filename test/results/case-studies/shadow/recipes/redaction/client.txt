@@ -1,0 +1,4 @@
+{"customer_id":7,"name":"Ada Lovelace","email":"ada@example.com"}
+
+{"customer_id":42,"name":"Grace Hopper","email":"grace@example.com"}
+

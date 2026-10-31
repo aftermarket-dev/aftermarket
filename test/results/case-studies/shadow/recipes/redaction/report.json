@@ -1,0 +1,61 @@
+{
+  "a": "http://127.0.0.1:9301",
+  "b": "http://127.0.0.1:9302",
+  "same": 0,
+  "different": 2,
+  "skipped": 0,
+  "errors": 0,
+  "cases": [
+    {
+      "name": "1 GET /api/v1/customer",
+      "method": "GET",
+      "path": "/api/v1/customer?id=7&api_key=REDACTED",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 404,
+      "differences": [
+        "status: 200 vs 404",
+        "customer_id: only in A (7)",
+        "email: only in A (REDACTED)",
+        "error: only in B (an object)",
+        "name: only in A (\"Ada Lovelace\")"
+      ]
+    },
+    {
+      "name": "2 GET /api/v1/customer",
+      "method": "GET",
+      "path": "/api/v1/customer?id=42&api_key=REDACTED",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 404,
+      "differences": [
+        "status: 200 vs 404",
+        "customer_id: only in A (42)",
+        "email: only in A (REDACTED)",
+        "error: only in B (an object)",
+        "name: only in A (\"Grace Hopper\")"
+      ]
+    }
+  ],
+  "headers_compared": [
+    "Content-Type"
+  ],
+  "shadow": {
+    "requests": 2,
+    "outside_when": 0,
+    "mirrored": 2,
+    "sampled_out": 0,
+    "writes_not_sent": 0,
+    "dropped_queue_full": 0,
+    "not_mirrored": 0,
+    "not_compared": 0,
+    "unfinished_at_stop": 0,
+    "cases_not_listed": 0,
+    "sample": 1,
+    "queue": 64,
+    "workers": 4,
+    "candidate_timeout": "5s",
+    "started": "2026-10-31T10:28:14Z",
+    "updated": "2026-10-31T10:28:15Z"
+  }
+}

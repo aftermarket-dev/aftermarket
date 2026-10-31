@@ -1,0 +1,2 @@
+aftermarket shadow 0.10.1: http://127.0.0.1:8390 -> http://127.0.0.1:9301, copies to http://127.0.0.1:9302, report report.md
+aftermarket shadow: stopped, 2 case(s): 0 same, 2 different, 0 skipped, 0 error(s); 0 dropped (queue full), report report.md
