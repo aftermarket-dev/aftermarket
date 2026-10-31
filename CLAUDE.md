@@ -153,6 +153,15 @@ Afterlife and AfterTrace stay research; Afterlife only ever replaces documented 
 
 Scope: `aftermarket shadow` (internal/shadow, record's Mirror hook in internal/record/proxy.go, replay.Send/Compare, cmd/aftermarket/shadow.go, docs/record.md shadow section, customer-api shadow test, release smoke). Checks: primary bytes unchanged (bodies, chunked, Expect, upgrades, early close), no blocking or latency from the candidate, queue and workers bounded with no leaks, data races between primary and copy, shutdown and final report, atomic report rewrite, sampling counter, redaction in report and logs, live vs replay comparison, method filtering, HEAD. Each suspected bug gets a failing test (race on) first. Resume: read this list, then `git log` for review commits.
 
+## In progress: shadow case studies (Oct 31 2026)
+
+Plan: case studies for `aftermarket shadow` 0.10.0 from real runs, plus a use examples post, for aftermarket.dev. Only new files in this repo (test/results/case-studies/shadow/: a rerun script per case, the commands, versions and the reports); shadow's code is not edited. Bugs found go under "Found during case studies" below, unfixed.
+- Case 1: Datasette 0.64.8 (primary) vs 1.0 alpha (candidate), read traffic on a SQLite database; JSON shape change, `query_ms` timing noise.
+- Case 2: json-server 0.17.4 vs 1.0 beta, a rewrite, with `--include-writes`, `--workers 1` and a separate candidate data file.
+- Case 3: load, sampling and drop counts (customer-api or one of the above).
+- Use examples post: rewrite, sampling, ignore rules, writes with a separate database, redaction, reading the report; each recipe run.
+- Site: posts tagged "case studies", links from use cases, the shadow post and the record reference. Content only.
+
 ## Status
 
 - Oct 19 2026: plan approved. Site cleaned and aligned with this plan. Repo initialised with LICENSE, NOTICE and this file.
