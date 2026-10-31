@@ -1,0 +1,7 @@
+$ curl -si "http://127.0.0.1:9102/parks.json?sql=select+name+from+parks+where+area_km2+>+5000&_shape=array" | grep -i -E "^HTTP|^location"
+HTTP/1.1 302 Found
+Location: /parks/-/query.json?sql=select+name+from+parks+where+area_km2+>+5000&_shape=array
+$ curl -sL "http://127.0.0.1:9102/parks.json?sql=select+name+from+parks+where+area_km2+>+5000&_shape=array"
+[{"name": "Yellowstone"}, {"name": "Everglades"}, {"name": "Denali"}]
+$ curl -s "http://127.0.0.1:9101/parks.json?sql=select+name+from+parks+where+area_km2+>+5000&_shape=array"
+[{"name": "Yellowstone"}, {"name": "Everglades"}, {"name": "Denali"}]

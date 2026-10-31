@@ -1,0 +1,16 @@
+{
+  "posts": [
+    {"id": 1, "title": "Shadow traffic before a switch", "views": 120, "authorId": 1},
+    {"id": 2, "title": "Reading a diff report", "views": 85, "authorId": 2},
+    {"id": 3, "title": "Ignore rules for timestamps", "views": 230, "authorId": 1},
+    {"id": 4, "title": "Sampling a busy service", "views": 40, "authorId": 3},
+    {"id": 5, "title": "Writes and a second database", "views": 310, "authorId": 2},
+    {"id": 6, "title": "Keeping credentials out of reports", "views": 64, "authorId": 1}
+  ],
+  "comments": [
+    {"id": 1, "body": "Useful", "postId": 1},
+    {"id": 2, "body": "We do this before every release", "postId": 1},
+    {"id": 3, "body": "What about gzip?", "postId": 3}
+  ],
+  "profile": {"name": "typicode"}
+}

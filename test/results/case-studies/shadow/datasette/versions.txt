@@ -1,0 +1,5 @@
+aftermarket 0.10.1
+primary: datasette 0.65.5 on 127.0.0.1:9101 (and a second copy on 9103 for the noise run)
+candidate: datasette 1.0a41 on 127.0.0.1:9102
+Python 3.13.18
+sqlite 3.53.1

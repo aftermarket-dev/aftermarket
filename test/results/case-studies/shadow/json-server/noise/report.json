@@ -1,0 +1,30 @@
+{
+  "a": "http://127.0.0.1:9201",
+  "b": "http://127.0.0.1:9202",
+  "same": 19,
+  "different": 0,
+  "skipped": 0,
+  "errors": 0,
+  "cases": null,
+  "headers_compared": [
+    "Content-Type"
+  ],
+  "shadow": {
+    "requests": 19,
+    "outside_when": 0,
+    "mirrored": 19,
+    "sampled_out": 0,
+    "writes_not_sent": 0,
+    "dropped_queue_full": 0,
+    "not_mirrored": 0,
+    "not_compared": 0,
+    "unfinished_at_stop": 0,
+    "cases_not_listed": 0,
+    "sample": 1,
+    "queue": 64,
+    "workers": 1,
+    "candidate_timeout": "5s",
+    "started": "2026-10-31T10:22:09Z",
+    "updated": "2026-10-31T10:22:11Z"
+  }
+}

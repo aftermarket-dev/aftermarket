@@ -1,0 +1,3 @@
+aftermarket 0.10.1
+primary: datasette 0.65.5, candidate: datasette 1.0a41, same machine (2 cores)
+load: 8 keep-alive clients, 6000 requests per run

@@ -1,0 +1,360 @@
+{
+  "a": "http://127.0.0.1:9101",
+  "b": "http://127.0.0.1:9102",
+  "same": 3,
+  "different": 15,
+  "skipped": 0,
+  "errors": 0,
+  "cases": [
+    {
+      "name": "1 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "allow_execute_sql: only in A (true)",
+        "columns: only in A (a list)",
+        "database: only in A (\"parks\")",
+        "expandable_columns: only in A (a list)",
+        "expanded_columns: only in A (a list)",
+        "facet_results: only in A (an object)",
+        "filtered_table_rows_count: only in A (12)",
+        "human_description_en: only in A (\"\")",
+        "is_view: only in A (false)",
+        "ok: only in B (true)",
+        "primary_keys: only in A (a list)",
+        "private: only in A (false)",
+        "query: only in A (an object)",
+        "rows.0: a list vs an object",
+        "rows.1: a list vs an object",
+        "rows.2: a list vs an object",
+        "rows.3: a list vs an object",
+        "rows.4: a list vs an object",
+        "rows.5: a list vs an object",
+        "rows.6: a list vs an object",
+        "and 8 more"
+      ]
+    },
+    {
+      "name": "2 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_size=5",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "allow_execute_sql: only in A (true)",
+        "columns: only in A (a list)",
+        "database: only in A (\"parks\")",
+        "expandable_columns: only in A (a list)",
+        "expanded_columns: only in A (a list)",
+        "facet_results: only in A (an object)",
+        "filtered_table_rows_count: only in A (12)",
+        "human_description_en: only in A (\"\")",
+        "is_view: only in A (false)",
+        "ok: only in B (true)",
+        "primary_keys: only in A (a list)",
+        "private: only in A (false)",
+        "query: only in A (an object)",
+        "rows.0: a list vs an object",
+        "rows.1: a list vs an object",
+        "rows.2: a list vs an object",
+        "rows.3: a list vs an object",
+        "rows.4: a list vs an object",
+        "suggested_facets: only in A (a list)",
+        "table: only in A (\"parks\")",
+        "and 1 more"
+      ]
+    },
+    {
+      "name": "3 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_size=5&_next=5",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "allow_execute_sql: only in A (true)",
+        "columns: only in A (a list)",
+        "database: only in A (\"parks\")",
+        "expandable_columns: only in A (a list)",
+        "expanded_columns: only in A (a list)",
+        "facet_results: only in A (an object)",
+        "filtered_table_rows_count: only in A (12)",
+        "human_description_en: only in A (\"\")",
+        "is_view: only in A (false)",
+        "ok: only in B (true)",
+        "primary_keys: only in A (a list)",
+        "private: only in A (false)",
+        "query: only in A (an object)",
+        "rows.0: a list vs an object",
+        "rows.1: a list vs an object",
+        "rows.2: a list vs an object",
+        "rows.3: a list vs an object",
+        "rows.4: a list vs an object",
+        "suggested_facets: only in A (a list)",
+        "table: only in A (\"parks\")",
+        "and 1 more"
+      ]
+    },
+    {
+      "name": "4 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?state=CA",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "allow_execute_sql: only in A (true)",
+        "columns: only in A (a list)",
+        "database: only in A (\"parks\")",
+        "expandable_columns: only in A (a list)",
+        "expanded_columns: only in A (a list)",
+        "facet_results: only in A (an object)",
+        "filtered_table_rows_count: only in A (3)",
+        "human_description_en: only in A (\"where state = \\\"CA\\\"\")",
+        "is_view: only in A (false)",
+        "ok: only in B (true)",
+        "primary_keys: only in A (a list)",
+        "private: only in A (false)",
+        "query: only in A (an object)",
+        "rows.0: a list vs an object",
+        "rows.1: a list vs an object",
+        "rows.2: a list vs an object",
+        "suggested_facets: only in A (a list)",
+        "table: only in A (\"parks\")",
+        "units: only in A (an object)"
+      ]
+    },
+    {
+      "name": "5 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?state=UT&_sort_desc=visitors_2023",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "allow_execute_sql: only in A (true)",
+        "columns: only in A (a list)",
+        "database: only in A (\"parks\")",
+        "expandable_columns: only in A (a list)",
+        "expanded_columns: only in A (a list)",
+        "facet_results: only in A (an object)",
+        "filtered_table_rows_count: only in A (2)",
+        "human_description_en: only in A (\"where state = \\\"UT\\\" sorted by visitors_2023 descending\")",
+        "is_view: only in A (false)",
+        "ok: only in B (true)",
+        "primary_keys: only in A (a list)",
+        "private: only in A (false)",
+        "query: only in A (an object)",
+        "rows.0: a list vs an object",
+        "rows.1: a list vs an object",
+        "suggested_facets: only in A (a list)",
+        "table: only in A (\"parks\")",
+        "units: only in A (an object)"
+      ]
+    },
+    {
+      "name": "6 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_facet=state",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "allow_execute_sql: only in A (true)",
+        "columns: only in A (a list)",
+        "database: only in A (\"parks\")",
+        "expandable_columns: only in A (a list)",
+        "expanded_columns: only in A (a list)",
+        "facet_results.results: only in B (an object)",
+        "facet_results.state: only in A (an object)",
+        "facet_results.timed_out: only in B (a list)",
+        "filtered_table_rows_count: only in A (12)",
+        "human_description_en: only in A (\"\")",
+        "is_view: only in A (false)",
+        "ok: only in B (true)",
+        "primary_keys: only in A (a list)",
+        "private: only in A (false)",
+        "query: only in A (an object)",
+        "rows.0: a list vs an object",
+        "rows.1: a list vs an object",
+        "rows.2: a list vs an object",
+        "rows.3: a list vs an object",
+        "rows.4: a list vs an object",
+        "and 10 more"
+      ]
+    },
+    {
+      "name": "8 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_shape=objects",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "allow_execute_sql: only in A (true)",
+        "columns: only in A (a list)",
+        "database: only in A (\"parks\")",
+        "expandable_columns: only in A (a list)",
+        "expanded_columns: only in A (a list)",
+        "facet_results: only in A (an object)",
+        "filtered_table_rows_count: only in A (12)",
+        "human_description_en: only in A (\"\")",
+        "is_view: only in A (false)",
+        "ok: only in B (true)",
+        "primary_keys: only in A (a list)",
+        "private: only in A (false)",
+        "query: only in A (an object)",
+        "suggested_facets: only in A (a list)",
+        "table: only in A (\"parks\")",
+        "units: only in A (an object)"
+      ]
+    },
+    {
+      "name": "10 GET /parks/parks/3.json",
+      "method": "GET",
+      "path": "/parks/parks/3.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "columns: only in A (a list)",
+        "ok: only in B (true)",
+        "rows.0: a list vs an object",
+        "truncated: only in B (false)",
+        "units: only in A (an object)"
+      ]
+    },
+    {
+      "name": "11 GET /parks/parks/12.json",
+      "method": "GET",
+      "path": "/parks/parks/12.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "columns: only in A (a list)",
+        "ok: only in B (true)",
+        "rows.0: a list vs an object",
+        "truncated: only in B (false)",
+        "units: only in A (an object)"
+      ]
+    },
+    {
+      "name": "13 GET /parks.json",
+      "method": "GET",
+      "path": "/parks.json?sql=select+state,+count(*)+as+n+from+parks+group+by+state+order+by+n+desc",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 302,
+      "differences": [
+        "status: 200 vs 302",
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"text/plain\"",
+        "header Location: \"\" vs \"/parks/-/query.json?sql=select+state,+count(*)+as+n+from+parks+group+by+state+order+by+n+desc\"",
+        "body: 406 bytes vs 0 bytes, first difference at byte 0"
+      ]
+    },
+    {
+      "name": "12 GET /parks/parks/99.json",
+      "method": "GET",
+      "path": "/parks/parks/99.json",
+      "outcome": "different",
+      "status_a": 404,
+      "status_b": 404,
+      "differences": [
+        "error: \"Record not found\" vs \"Row not found\"",
+        "errors: only in B (a list)",
+        "title: only in A (null)"
+      ]
+    },
+    {
+      "name": "14 GET /parks.json",
+      "method": "GET",
+      "path": "/parks.json?sql=select+name+from+parks+where+area_km2+>+5000&_shape=array",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 302,
+      "differences": [
+        "status: 200 vs 302",
+        "header Content-Type: \"application/json; charset=utf-8\" vs \"text/plain\"",
+        "header Location: \"\" vs \"/parks/-/query.json?sql=select+name+from+parks+where+area_km2+>+5000&_shape=array\"",
+        "body: 69 bytes vs 0 bytes, first difference at byte 0"
+      ]
+    },
+    {
+      "name": "15 GET /parks.json",
+      "method": "GET",
+      "path": "/parks.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "metadata: only in B (an object)",
+        "ok: only in B (true)",
+        "queries_count: only in B (0)",
+        "queries_more: only in B (false)",
+        "table_columns: only in B (an object)",
+        "tables.0.count_truncated: only in B (false)"
+      ]
+    },
+    {
+      "name": "20 GET /-/versions.json",
+      "method": "GET",
+      "path": "/-/versions.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "datasette.version: \"0.65.5\" vs \"1.0a41\"",
+        "ok: only in B (true)",
+        "sqlite.extensions.json1: null vs true"
+      ]
+    },
+    {
+      "name": "22 GET /-/metadata.json",
+      "method": "GET",
+      "path": "/-/metadata.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 404,
+      "differences": [
+        "status: 200 vs 404",
+        "error: only in B (\"Database not found\")",
+        "errors: only in B (a list)",
+        "ok: only in B (false)",
+        "status: only in B (404)"
+      ]
+    }
+  ],
+  "ignored": [
+    "query_ms",
+    "next_url",
+    "suggested_facets.*.toggle_url",
+    "facet_results.*.results.*.toggle_url"
+  ],
+  "headers_compared": [
+    "Content-Type",
+    "Location"
+  ],
+  "shadow": {
+    "requests": 22,
+    "outside_when": 4,
+    "mirrored": 18,
+    "sampled_out": 0,
+    "writes_not_sent": 0,
+    "dropped_queue_full": 0,
+    "not_mirrored": 0,
+    "not_compared": 0,
+    "unfinished_at_stop": 0,
+    "cases_not_listed": 0,
+    "sample": 1,
+    "queue": 64,
+    "workers": 4,
+    "candidate_timeout": "5s",
+    "started": "2026-10-31T10:22:33Z",
+    "updated": "2026-10-31T10:22:35Z"
+  }
+}

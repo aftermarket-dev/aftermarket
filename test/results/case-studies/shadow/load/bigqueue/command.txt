@@ -1,0 +1,1 @@
+aftermarket shadow --primary http://127.0.0.1:9101 --candidate http://127.0.0.1:9102 --listen 127.0.0.1:8190 --report report.md --json report.json --audit-log '' --queue 1024 --workers 8 

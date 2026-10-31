@@ -1,0 +1,1 @@
+aftermarket shadow --primary http://127.0.0.1:9201 --candidate http://127.0.0.1:9202 --listen 127.0.0.1:8290 --report report.md --json report.json --audit-log '' 

@@ -1,0 +1,193 @@
+{
+  "a": "http://127.0.0.1:9101",
+  "b": "http://127.0.0.1:9103",
+  "same": 9,
+  "different": 13,
+  "skipped": 0,
+  "errors": 0,
+  "cases": [
+    {
+      "name": "1 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 12.344115000814782 vs 16.873082999154576",
+        "suggested_facets.0.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\"",
+        "suggested_facets.1.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=established\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=established\""
+      ]
+    },
+    {
+      "name": "3 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_size=5&_next=5",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "next_url: \"http://127.0.0.1:9101/parks/parks.json?_size=5\\u0026_next=10\" vs \"http://127.0.0.1:9103/parks/parks.json?_size=5\\u0026_next=10\"",
+        "query_ms: 5.526615001144819 vs 8.517696000126307"
+      ]
+    },
+    {
+      "name": "2 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_size=5",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "next_url: \"http://127.0.0.1:9101/parks/parks.json?_size=5\\u0026_next=5\" vs \"http://127.0.0.1:9103/parks/parks.json?_size=5\\u0026_next=5\"",
+        "query_ms: 22.396326001398847 vs 26.437513000928448",
+        "suggested_facets.0.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_size=5\\u0026_facet=state\" vs \"http://127.0.0.1:9103/parks/parks.json?_size=5\\u0026_facet=state\"",
+        "suggested_facets.1.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_size=5\\u0026_facet=established\" vs \"http://127.0.0.1:9103/parks/parks.json?_size=5\\u0026_facet=established\""
+      ]
+    },
+    {
+      "name": "4 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?state=CA",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 6.232105999515625 vs 20.255631001418806",
+        "suggested_facets.0.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?state=CA\\u0026_facet=established\" vs \"http://127.0.0.1:9103/parks/parks.json?state=CA\\u0026_facet=established\""
+      ]
+    },
+    {
+      "name": "5 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?state=UT&_sort_desc=visitors_2023",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 6.020791999617359 vs 71.05857100032154"
+      ]
+    },
+    {
+      "name": "10 GET /parks/parks/3.json",
+      "method": "GET",
+      "path": "/parks/parks/3.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 3.0812029999651713 vs 9.426721000636462"
+      ]
+    },
+    {
+      "name": "6 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_facet=state",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "facet_results.state.results.0.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=CA\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=CA\"",
+        "facet_results.state.results.1.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=UT\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=UT\"",
+        "facet_results.state.results.2.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=AK\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=AK\"",
+        "facet_results.state.results.3.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=AZ\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=AZ\"",
+        "facet_results.state.results.4.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=FL\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=FL\"",
+        "facet_results.state.results.5.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=ME\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=ME\"",
+        "facet_results.state.results.6.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=MT\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=MT\"",
+        "facet_results.state.results.7.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=WA\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=WA\"",
+        "facet_results.state.results.8.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026state=WY\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026state=WY\"",
+        "query_ms: 7.16043099964736 vs 112.94420700141927",
+        "suggested_facets.0.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_facet=state\\u0026_facet=established\" vs \"http://127.0.0.1:9103/parks/parks.json?_facet=state\\u0026_facet=established\""
+      ]
+    },
+    {
+      "name": "11 GET /parks/parks/12.json",
+      "method": "GET",
+      "path": "/parks/parks/12.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 2.9137199999240693 vs 14.857948999633663"
+      ]
+    },
+    {
+      "name": "13 GET /parks.json",
+      "method": "GET",
+      "path": "/parks.json?sql=select+state,+count(*)+as+n+from+parks+group+by+state+order+by+n+desc",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 2.195004000896006 vs 2.0747149992530467"
+      ]
+    },
+    {
+      "name": "15 GET /parks.json",
+      "method": "GET",
+      "path": "/parks.json",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 7.219149998491048 vs 25.491823000265867"
+      ]
+    },
+    {
+      "name": "8 GET /parks/parks.json",
+      "method": "GET",
+      "path": "/parks/parks.json?_shape=objects",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "query_ms: 18.44755499951134 vs 91.39196800060745",
+        "suggested_facets.0.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_shape=objects\\u0026_facet=state\" vs \"http://127.0.0.1:9103/parks/parks.json?_shape=objects\\u0026_facet=state\"",
+        "suggested_facets.1.toggle_url: \"http://127.0.0.1:9101/parks/parks.json?_shape=objects\\u0026_facet=established\" vs \"http://127.0.0.1:9103/parks/parks.json?_shape=objects\\u0026_facet=established\""
+      ]
+    },
+    {
+      "name": "18 GET /parks/parks",
+      "method": "GET",
+      "path": "/parks/parks",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "body: 17309 bytes vs 17309 bytes, first difference at byte 305"
+      ]
+    },
+    {
+      "name": "19 GET /parks/parks/3",
+      "method": "GET",
+      "path": "/parks/parks/3",
+      "outcome": "different",
+      "status_a": 200,
+      "status_b": 200,
+      "differences": [
+        "body: 4590 bytes vs 4590 bytes, first difference at byte 296"
+      ]
+    }
+  ],
+  "headers_compared": [
+    "Content-Type"
+  ],
+  "shadow": {
+    "requests": 22,
+    "outside_when": 0,
+    "mirrored": 22,
+    "sampled_out": 0,
+    "writes_not_sent": 0,
+    "dropped_queue_full": 0,
+    "not_mirrored": 0,
+    "not_compared": 0,
+    "unfinished_at_stop": 0,
+    "cases_not_listed": 0,
+    "sample": 1,
+    "queue": 64,
+    "workers": 4,
+    "candidate_timeout": "5s",
+    "started": "2026-10-31T10:22:30Z",
+    "updated": "2026-10-31T10:22:32Z"
+  }
+}

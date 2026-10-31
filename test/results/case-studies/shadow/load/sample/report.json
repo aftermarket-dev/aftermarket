@@ -1,0 +1,30 @@
+{
+  "a": "http://127.0.0.1:9101",
+  "b": "http://127.0.0.1:9102",
+  "same": 600,
+  "different": 0,
+  "skipped": 0,
+  "errors": 0,
+  "cases": null,
+  "headers_compared": [
+    "Content-Type"
+  ],
+  "shadow": {
+    "requests": 6000,
+    "outside_when": 0,
+    "mirrored": 600,
+    "sampled_out": 5400,
+    "writes_not_sent": 0,
+    "dropped_queue_full": 0,
+    "not_mirrored": 0,
+    "not_compared": 0,
+    "unfinished_at_stop": 0,
+    "cases_not_listed": 0,
+    "sample": 0.1,
+    "queue": 64,
+    "workers": 4,
+    "candidate_timeout": "5s",
+    "started": "2026-10-31T10:24:39Z",
+    "updated": "2026-10-31T10:25:16Z"
+  }
+}

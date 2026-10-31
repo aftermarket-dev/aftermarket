@@ -151,12 +151,14 @@ Afterlife and AfterTrace stay research; Afterlife only ever replaces documented 
 
 ## In progress: shadow case studies (Oct 31 2026)
 
-Plan: case studies for `aftermarket shadow` 0.10.0 from real runs, plus a use examples post, for aftermarket.dev. Only new files in this repo (test/results/case-studies/shadow/: a rerun script per case, the commands, versions and the reports); shadow's code is not edited. Bugs found go under "Found during case studies" below, unfixed.
-- Case 1: Datasette 0.64.8 (primary) vs 1.0 alpha (candidate), read traffic on a SQLite database; JSON shape change, `query_ms` timing noise.
-- Case 2: json-server 0.17.4 vs 1.0 beta, a rewrite, with `--include-writes`, `--workers 1` and a separate candidate data file.
-- Case 3: load, sampling and drop counts (customer-api or one of the above).
+Plan: case studies for `aftermarket shadow` from real runs on the downloaded 0.10.1, plus a use examples post, for aftermarket.dev. Only new files in this repo (test/results/case-studies/shadow/: a rerun script per case, the commands, versions and the reports); shadow's code is not edited. Bugs found go under "Found during case studies" below, unfixed.
+- Case 1 (recorded): Datasette 0.65.5 (primary) vs 1.0a41 (candidate), read traffic on a SQLite database; noise run with 0.65.5 on both sides first (query_ms, absolute URLs carrying the upstream host).
+- Case 2 (recorded): json-server 0.17.4 vs 1.0.0-beta.15, a rewrite, reads only, then `--include-writes --workers 1` with a separate candidate data file.
+- Case 3 (recorded): the Datasette pair under 8 keep-alive clients: drops with the defaults, `--sample 0.1`, a bigger queue.
 - Use examples post: rewrite, sampling, ignore rules, writes with a separate database, redaction, reading the report; each recipe run.
 - Site: posts tagged "case studies", links from use cases, the shadow post and the record reference. Content only.
+
+Found during case studies: replay's report (and so shadow's) writes values with Go's default JSON escaping, so `&`, `<` and `>` in a string show as `\u0026`, `\u003c` and `\u003e` in report.md and in the differences of report.json (internal/replay/compare.go show() uses json.Marshal; WriteJSON already turns HTML escaping off). Seen on Datasette URLs such as next_url. Not fixed.
 
 ## Status
 

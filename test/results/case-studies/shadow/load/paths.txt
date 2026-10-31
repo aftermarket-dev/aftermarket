@@ -1,0 +1,4 @@
+/parks/parks.json?_shape=array
+/parks/parks.json?_shape=array&state=CA
+/parks/parks.json?_shape=array&established__gt=1930
+/parks/parks.json?_shape=array&_sort_desc=visitors_2023&_size=3

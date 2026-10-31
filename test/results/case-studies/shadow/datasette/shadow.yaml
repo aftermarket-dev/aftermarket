@@ -1,0 +1,6 @@
+version: 1
+# Copy only the JSON API. HTML pages are compared byte for byte, so a
+# timing line or a redesign makes every page differ; leave them out.
+when:
+  method: GET
+  path: "/**.json"

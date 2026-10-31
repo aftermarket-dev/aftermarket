@@ -1,0 +1,1 @@
+aftermarket shadow --primary http://127.0.0.1:9101 --candidate http://127.0.0.1:9102 --listen 127.0.0.1:8190 --report report.md --json report.json --audit-log '' --config shadow.yaml --ignore query_ms --ignore next_url --ignore suggested_facets.\*.toggle_url --ignore facet_results.\*.results.\*.toggle_url --header Content-Type --header Location 

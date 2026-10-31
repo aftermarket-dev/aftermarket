@@ -1,0 +1,3 @@
+requests: 6000 statuses: {200: 6000} threads: 8
+elapsed: 32.2s throughput: 186 req/s
+latency ms: p50 35.7 p90 72.5 p99 113.3 max 274.0
