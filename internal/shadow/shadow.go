@@ -77,7 +77,10 @@ type Shadow struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	busy   atomic.Int64
+	// pending counts copies queued or being compared. It goes up before a
+	// copy enters the queue, so Idle never sees a copy between the queue
+	// and a worker.
+	pending atomic.Int64
 
 	writerDone chan struct{}
 	stopWriter chan struct{}
@@ -87,6 +90,7 @@ type Shadow struct {
 	mu      sync.Mutex
 	matched uint64 // requests offered to sampling
 	offered int64  // requests that matched when: (Select was asked)
+	outside int64  // kept requests let go because the answer didn't match when:
 	rep     replay.Report
 	dirty   bool
 	saveErr error
@@ -150,14 +154,15 @@ func New(o Options) (*Shadow, error) {
 		kick:       make(chan struct{}, 1),
 	}
 	rec, err := record.New(record.Options{
-		Upstream:   o.Primary,
-		Config:     o.Config,
-		Audit:      o.Audit,
-		HealthPath: o.HealthPath,
-		Transport:  o.PrimaryTransport,
-		Select:     s.selectRequest,
-		Mirror:     s.mirror,
-		Skipped:    s.skipped,
+		Upstream:    o.Primary,
+		Config:      o.Config,
+		Audit:       o.Audit,
+		HealthPath:  o.HealthPath,
+		Transport:   o.PrimaryTransport,
+		Select:      s.selectRequest,
+		Mirror:      s.mirror,
+		Skipped:     s.skipped,
+		OutsideWhen: s.outsideWhen,
 	})
 	if err != nil {
 		return nil, err
@@ -200,6 +205,7 @@ func (s *Shadow) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if s.opts.HealthPath == "" || req.URL.Path != s.opts.HealthPath {
 		s.mu.Lock()
 		s.rep.Shadow.Requests++
+		s.dirty = true
 		s.mu.Unlock()
 	}
 	s.rec.ServeHTTP(w, req)
@@ -212,6 +218,7 @@ func (s *Shadow) selectRequest(req *http.Request) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.offered++
+	s.dirty = true
 	if req.Method != http.MethodGet && req.Method != http.MethodHead && !s.opts.IncludeWrites {
 		s.rep.Shadow.WritesNotSent++
 		return false
@@ -227,6 +234,7 @@ func (s *Shadow) selectRequest(req *http.Request) bool {
 
 // mirror runs on the request's goroutine: it must never wait.
 func (s *Shadow) mirror(ex *record.Exchange) {
+	s.pending.Add(1)
 	select {
 	case s.queue <- ex:
 		s.mu.Lock()
@@ -234,11 +242,20 @@ func (s *Shadow) mirror(ex *record.Exchange) {
 		s.dirty = true
 		s.mu.Unlock()
 	default:
+		s.pending.Add(-1)
 		s.mu.Lock()
 		s.rep.Shadow.Dropped++
 		s.dirty = true
 		s.mu.Unlock()
 	}
+}
+
+// outsideWhen counts an answer left out by when:'s status or content_type.
+func (s *Shadow) outsideWhen() {
+	s.mu.Lock()
+	s.outside++
+	s.dirty = true
+	s.mu.Unlock()
 }
 
 func (s *Shadow) skipped(reason string) {
@@ -256,11 +273,21 @@ func (s *Shadow) worker() {
 		case <-s.ctx.Done():
 			return
 		case ex := <-s.queue:
-			s.busy.Add(1)
-			s.compare(ex)
-			s.busy.Add(-1)
+			if s.ctx.Err() != nil {
+				s.unfinished() // stopping: a queued copy is not sent
+			} else {
+				s.compare(ex)
+			}
+			s.pending.Add(-1)
 		}
 	}
+}
+
+func (s *Shadow) unfinished() {
+	s.mu.Lock()
+	s.rep.Shadow.Unfinished++
+	s.dirty = true
+	s.mu.Unlock()
 }
 
 // compare sends one copy to the candidate and adds the outcome to the report.
@@ -275,11 +302,23 @@ func (s *Shadow) compare(ex *record.Exchange) {
 		s.mu.Unlock()
 		return
 	}
-	a := &replay.Answer{Status: ex.Status, Header: s.reportHeaders(ex.RespHeader), Body: primaryBody}
+	respHeader := ex.RespHeader
+	if ex.Method != http.MethodHead && len(ex.RespBody) > 0 && strings.EqualFold(respHeader.Get("Content-Encoding"), "gzip") {
+		// The candidate's client drops these two when it decodes gzip, so
+		// the primary's answer is compared the same way, as replay does.
+		respHeader = respHeader.Clone()
+		respHeader.Del("Content-Encoding")
+		respHeader.Del("Content-Length")
+	}
+	a := &replay.Answer{Status: ex.Status, Header: s.reportHeaders(respHeader), Body: primaryBody}
 	uri := cfg.RedactURI(ex.URI)
 	path, _, _ := strings.Cut(uri, "?")
 	cr := replay.CaseReport{Name: fmt.Sprintf("%d %s %s", ex.ID, ex.Method, path), Method: ex.Method, Path: uri, StatusA: ex.Status}
 	b, err := replay.Send(s.ctx, s.client, s.opts.Candidate, replay.Request{Method: ex.Method, URI: ex.URI, Header: requestHeaders(ex.Header), Body: ex.Body}, nil, cfg.MaxBody)
+	if err != nil && s.ctx.Err() != nil {
+		s.unfinished() // cut short by the stop, not failed by the candidate
+		return
+	}
 	if err != nil {
 		cr.Outcome, cr.Reason = replay.Failed, "B: "+err.Error()
 	} else {
@@ -352,7 +391,7 @@ func (s *Shadow) snapshot() replay.Report {
 	r := s.rep
 	r.Cases = append([]replay.CaseReport(nil), s.rep.Cases...)
 	st := *s.rep.Shadow
-	st.OutsideWhen = st.Requests - s.offered
+	st.OutsideWhen = st.Requests - s.offered + s.outside
 	st.NotMirroredWhy = map[string]int64{}
 	for k, v := range s.rep.Shadow.NotMirroredWhy {
 		st.NotMirroredWhy[k] = v
@@ -362,7 +401,7 @@ func (s *Shadow) snapshot() replay.Report {
 }
 
 // Idle reports whether nothing is queued or being compared.
-func (s *Shadow) Idle() bool { return len(s.queue) == 0 && s.busy.Load() == 0 }
+func (s *Shadow) Idle() bool { return s.pending.Load() == 0 }
 
 // save writes both reports, each in one step (a temporary file renamed over
 // the old one), so a reader never sees half a report.
@@ -423,10 +462,14 @@ func (s *Shadow) reportHeaders(h http.Header) http.Header {
 }
 
 // requestHeaders drops the headers that belong to the client's connection
-// to the proxy, as a recording would.
+// to the proxy.
 func requestHeaders(h http.Header) http.Header {
 	out := h.Clone()
-	for _, k := range []string{"Connection", "Keep-Alive", "Proxy-Connection", "Te", "Trailer", "Upgrade"} {
+	// The hop-by-hop headers Go's reverse proxy drops on the way to the
+	// primary, so the candidate doesn't get a proxy credential the primary
+	// never saw.
+	for _, k := range []string{"Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
+		"Proxy-Connection", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
 		delete(out, k)
 	}
 	for _, k := range h.Values("Connection") {

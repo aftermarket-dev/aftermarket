@@ -152,6 +152,7 @@ Afterlife and AfterTrace stay research; Afterlife only ever replaces documented 
 ## In progress: independent review of shadow mode (Oct 31 2026)
 
 Scope: `aftermarket shadow` (internal/shadow, record's Mirror hook in internal/record/proxy.go, replay.Send/Compare, cmd/aftermarket/shadow.go, docs/record.md shadow section, customer-api shadow test, release smoke). Checks: primary bytes unchanged (bodies, chunked, Expect, upgrades, early close), no blocking or latency from the candidate, queue and workers bounded with no leaks, data races between primary and copy, shutdown and final report, atomic report rewrite, sampling counter, redaction in report and logs, live vs replay comparison, method filtering, HEAD. Each suspected bug gets a failing test (race on) first. Resume: read this list, then `git log` for review commits.
+Progress: 5 bugs confirmed with failing tests and fixed in the 0.10.1 commit (cancelled copies at stop reported as candidate errors; gzip primary headers compared raw; running report not rewritten without copies; answers outside when:'s status/content_type uncounted; Proxy-Authorization and other hop-by-hop headers sent to the candidate). Next: watch CI and the release, check the files, update the site's test count.
 
 ## In progress: shadow case studies (Oct 31 2026)
 

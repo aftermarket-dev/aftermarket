@@ -43,6 +43,10 @@ type Options struct {
 	// Skipped, when set, is told the reason each time an exchange that
 	// matched can't be kept. The audit log gets the same event.
 	Skipped func(reason string)
+	// OutsideWhen, when set, is told each time a request that was kept is
+	// let go because its answer doesn't match when:'s status or
+	// content_type.
+	OutsideWhen func()
 }
 
 // Exchange is one finished request and answer, as Mirror receives it.
@@ -193,7 +197,13 @@ func (r *Recorder) rewrite(pr *httputil.ProxyRequest) {
 func (r *Recorder) modifyResponse(resp *http.Response) error {
 	httpx.CloseIfBodyUnfinished(resp)
 	ex, _ := resp.Request.Context().Value(ctxKey{}).(*exchange)
-	if ex == nil || !ex.record || !r.opts.Config.When.MatchResponse(resp.StatusCode, resp.Header.Get("Content-Type")) {
+	if ex == nil || !ex.record {
+		return nil
+	}
+	if !r.opts.Config.When.MatchResponse(resp.StatusCode, resp.Header.Get("Content-Type")) {
+		if r.opts.OutsideWhen != nil {
+			r.opts.OutsideWhen()
+		}
 		return nil
 	}
 	if resp.StatusCode < 200 {

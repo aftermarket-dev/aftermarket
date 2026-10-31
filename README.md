@@ -466,7 +466,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.10.0 adds `aftermarket shadow`, AfterDiff's live mode. 0.9.0 added `aftermarket bridge` (AfterBridge), 0.8.0 added `aftermarket schema` (AfterSchema), 0.7.0 added TOML to `aftermarket config`, 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.10.0 added `aftermarket shadow`, AfterDiff's live mode, and 0.10.1 fixes what an independent review of it found. 0.9.0 added `aftermarket bridge` (AfterBridge), 0.8.0 added `aftermarket schema` (AfterSchema), 0.7.0 added TOML to `aftermarket config`, 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 

@@ -151,13 +151,13 @@ The candidate can't slow down or break the primary path:
 - **`--sample 0.1`** copies one request in ten. The share is counted, not drawn at random, so 0.1 means exactly every tenth request.
 - **Only GET and HEAD are copied by default**, as with replay. `--include-writes` copies the rest too. Point the candidate at its own data when you use it: a candidate sharing the primary's database would make every write twice. Copies run in parallel, so writes reach the candidate in order only with `--workers 1`.
 
-The request goes to the candidate as the client sent it, real credentials included, since the candidate has to answer the same request. Connection headers and `Accept-Encoding` are left to the HTTP client, as in replay, and a gzip answer from the primary is decoded before it is compared, as replay's client does. So shadow and replay report the same differences for the same traffic; the tests check this on the customer-api suite and on random answers.
+The request goes to the candidate as the client sent it, real credentials included, since the candidate has to answer the same request. The candidate doesn't get the hop-by-hop headers the primary doesn't get either (`Connection`, `Proxy-Authorization` and the rest), and `Accept-Encoding` is left to the HTTP client, as in replay. A gzip answer from the primary is decoded before it is compared, without its `Content-Encoding` and `Content-Length`, the way replay's client sees it. So shadow and replay report the same differences for the same traffic; the tests check this on the customer-api suite and on random answers.
 
 ### Config
 
 shadow reads the same config file as record (see above):
 
-- `when:` picks the requests that are copied. The rest pass through and are counted as outside `when:`.
+- `when:` picks the requests that are copied. The rest pass through and are counted as outside `when:`, including those whose answer doesn't match its `status` or `content_type`.
 - `redact:` keeps values out of the report. Query values under listed keys (and the credential keys) read `REDACTED` in the paths. A compared header on the list, such as `Set-Cookie`, is reported as `header Set-Cookie: differs (REDACTED)`. A difference at a listed JSON path is reported as `password: differs (REDACTED)` or `only in A (REDACTED)`, without either value.
 - `limits:` sets `max_body` (1 MiB by default): an exchange with a bigger request or answer is passed through and not copied. `upstream_timeout` applies to the primary, as in record.
 - `max_cases` isn't used.
@@ -166,9 +166,9 @@ Exchanges that can't be compared safely are passed through and counted with a re
 
 ### Report
 
-The report is replay's format, with A the primary and B the candidate: the Markdown file at `--report` (`shadow-report.md` by default) and, with `--json FILE`, the same report as JSON. A `shadow` block adds the counts: requests served, copied, outside `when:`, left out by sampling, writes not sent, dropped because the queue was full, not copied and why, and copies still queued at stop. Only cases with a difference or an error are listed, at most 1000; the counts keep going after that.
+The report is replay's format, with A the primary and B the candidate: the Markdown file at `--report` (`shadow-report.md` by default) and, with `--json FILE`, the same report as JSON. A `shadow` block adds the counts: requests served, copied, outside `when:`, left out by sampling, writes not sent, dropped because the queue was full, not copied and why, and copies not compared because shadow stopped (still queued, or cut short while waiting for the candidate). Only cases with a difference or an error are listed, at most 1000; the counts keep going after that.
 
-Each file is rewritten at most once a second while something changes, in one step (a temporary file renamed over the old one), so a reader never sees half a report. On Ctrl-C or SIGTERM, shadow stops taking requests, waits up to the candidate timeout for copies in the queue, writes the final report and prints the summary. It exits 0: differences are findings, not failures.
+Each file is rewritten at most once a second while traffic comes in, in one step (a temporary file renamed over the old one), so a reader never sees half a report. On Ctrl-C or SIGTERM, shadow stops taking requests, waits up to the candidate timeout and a second for copies in the queue, counts the ones left as not compared at stop (never as candidate errors), writes the final report and prints the summary. It exits 0: differences are findings, not failures.
 
 The audit log has record's events plus one `compared` event per copy, with `same`, `different` or the error as the reason. Like the other logs, it never holds values.
 

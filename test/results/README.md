@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.10.0
-- Recorded: 2026-10-31T09:35:36Z
+- Version: 0.10.1
+- Recorded: 2026-10-31T10:08:15Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-554 of 554 tests passed (race detector on).
+565 of 565 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -373,17 +373,23 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/schema | TestSQLIsStable | pass |
 | internal/schema | TestVerifyFindsBadExpressions | pass |
 | internal/schema | TestVirtualTables | pass |
+| internal/shadow | TestAnswerOutsideWhenIsCounted | pass |
 | internal/shadow | TestAnswersAreByteIdenticalWithShadowing | pass |
 | internal/shadow | TestBadCandidatesAddNoLatency | pass |
+| internal/shadow | TestCandidateDoesNotGetProxyCredentials | pass |
 | internal/shadow | TestCandidateGetsTheRequestAsSent | pass |
 | internal/shadow | TestConcurrentShadowing | pass |
 | internal/shadow | TestCredentialsNeverReachTheReport | pass |
 | internal/shadow | TestFullQueueDropsAndCounts | pass |
+| internal/shadow | TestGzipAnswerHeadersMatchReplay | pass |
 | internal/shadow | TestLiveDifferencesMatchReplay | pass |
 | internal/shadow | TestNotMirroredAndListingLimit | pass |
 | internal/shadow | TestOptionsAreChecked | pass |
+| internal/shadow | TestPrimaryPathChecksThroughShadow | pass |
 | internal/shadow | TestReportIsWrittenWhileRunning | pass |
+| internal/shadow | TestRunningReportShowsCountsWithoutCopies | pass |
 | internal/shadow | TestSamplingAndWrites | pass |
+| internal/shadow | TestStopCountsCancelledCopiesAsUnfinished | pass |
 | internal/shadow | TestStopDoesNotWaitForever | pass |
 | internal/shadow | TestWhenAndLocation | pass |
 | internal/sqlitecli | TestErrorLinesPointIntoTheFile | pass |
@@ -408,24 +414,24 @@ The shadow rows serve the same v2 lookup from the primary while copies go to a c
 
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 68.9 µs | 4498.4 µs | 6259 |
-| proxy, no rule matches | 223.5 µs | 6848.5 µs | 1341 |
-| proxy, both example rules applied | 245.2 µs | 2326.8 µs | 1916 |
-| adapt: direct to v2, one customer | 56.5 µs | 2159.7 µs | 7550 |
-| adapt: v1 lookup rebuilt from v2 | 240.3 µs | 3012.8 µs | 362 |
-| adapt: direct to v2, list | 57.6 µs | 410.1 µs | 2663 |
-| adapt: v1 list rebuilt from v2 | 305.6 µs | 3301.1 µs | 1308 |
-| record: v2 lookup saved to a fixture | 253.9 µs | 3052.4 µs | 1391 |
-| shadow: candidate answers the same | 270.3 µs | 8582.0 µs | 1272 |
-| shadow: candidate down | 273.4 µs | 8331.0 µs | 991 |
-| shadow: candidate slow (1 s per answer) | 205.6 µs | 5818.1 µs | 977 |
-| shadow: candidate fails (500) | 264.9 µs | 9176.1 µs | 703 |
+| direct to upstream | 57.2 µs | 4356.7 µs | 5971 |
+| proxy, no rule matches | 214.4 µs | 1822.7 µs | 1463 |
+| proxy, both example rules applied | 275.0 µs | 3862.9 µs | 1609 |
+| adapt: direct to v2, one customer | 57.1 µs | 372.5 µs | 7717 |
+| adapt: v1 lookup rebuilt from v2 | 236.3 µs | 5345.0 µs | 1743 |
+| adapt: direct to v2, list | 68.8 µs | 3549.6 µs | 5143 |
+| adapt: v1 list rebuilt from v2 | 258.0 µs | 3306.7 µs | 663 |
+| record: v2 lookup saved to a fixture | 266.3 µs | 5443.9 µs | 1403 |
+| shadow: candidate answers the same | 255.3 µs | 10103.7 µs | 1383 |
+| shadow: candidate down | 262.5 µs | 4823.1 µs | 1132 |
+| shadow: candidate slow (1 s per answer) | 209.2 µs | 4268.6 µs | 1502 |
+| shadow: candidate fails (500) | 291.1 µs | 7114.3 µs | 930 |
 
-Added by the proxy when no rule matches: 154.6 µs at p50, 2350.1 µs at p99.
-Added by the proxy with both example rules applied: 176.3 µs at p50, -2171.5 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 183.8 µs at p50, 853.1 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 248.0 µs at p50, 2891.0 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 197.4 µs at p50, 892.7 µs at p99.
+Added by the proxy when no rule matches: 157.2 µs at p50, -2533.9 µs at p99.
+Added by the proxy with both example rules applied: 217.8 µs at p50, -493.7 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 179.2 µs at p50, 4972.5 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 189.2 µs at p50, -242.8 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 209.2 µs at p50, 5071.4 µs at p99.
 
 ## Shadow
 
@@ -433,7 +439,7 @@ Time added on the primary path, against a direct call to v2, and what happened t
 
 | Candidate | Added p50 | Added p99 | Requests | Copied | Dropped (queue full) | Same | Different | Errors |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| candidate answers the same | 213.8 µs | 6422.3 µs | 24566 | 23617 | 949 | 23617 | 0 | 0 |
-| candidate down | 216.9 µs | 6171.3 µs | 23987 | 23987 | 0 | 0 | 0 | 23987 |
-| candidate slow (1 s per answer) | 149.1 µs | 3658.4 µs | 23966 | 112 | 23854 | 112 | 0 | 0 |
-| candidate fails (500) | 208.4 µs | 7016.4 µs | 23419 | 22982 | 437 | 0 | 22982 | 0 |
+| candidate answers the same | 198.2 µs | 9731.2 µs | 24809 | 23780 | 1029 | 23780 | 0 | 0 |
+| candidate down | 205.4 µs | 4450.6 µs | 24271 | 24263 | 8 | 0 | 0 | 24263 |
+| candidate slow (1 s per answer) | 152.1 µs | 3896.1 µs | 25014 | 104 | 24910 | 104 | 0 | 0 |
+| candidate fails (500) | 234.0 µs | 6741.8 µs | 23875 | 23242 | 633 | 0 | 23242 | 0 |

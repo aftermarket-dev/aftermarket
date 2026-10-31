@@ -82,7 +82,7 @@ type ShadowStats struct {
 	NotMirrored      int64            `json:"not_mirrored"`       // matched but couldn't be compared safely (see reasons)
 	NotCompared      int64            `json:"not_compared"`       // copied, but the primary's answer couldn't be compared (see reasons)
 	NotMirroredWhy   map[string]int64 `json:"not_mirrored_reasons,omitempty"`
-	Unfinished       int64            `json:"unfinished_at_stop"` // still queued when shadow stopped
+	Unfinished       int64            `json:"unfinished_at_stop"` // not compared because shadow stopped (queued, or cut short)
 	NotListed        int64            `json:"cases_not_listed"`   // differences and errors beyond the listing limit
 	Sample           float64          `json:"sample"`
 	Queue            int              `json:"queue"`
@@ -400,7 +400,7 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 			fmt.Fprintf(&b, "  - %s: %d\n", k, s.NotMirroredWhy[k])
 		}
 		if s.Unfinished > 0 {
-			fmt.Fprintf(&b, "- %d copy(ies) still queued at stop, not compared\n", s.Unfinished)
+			fmt.Fprintf(&b, "- %d copy(ies) not compared because shadow stopped\n", s.Unfinished)
 		}
 		fmt.Fprintf(&b, "- %d worker(s), candidate timeout %s\n", s.Workers, s.CandidateTimeout)
 		if s.NotListed > 0 {
