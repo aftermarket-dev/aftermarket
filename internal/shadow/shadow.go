@@ -86,6 +86,7 @@ type Shadow struct {
 
 	mu      sync.Mutex
 	matched uint64 // requests offered to sampling
+	offered int64  // requests that matched when: (Select was asked)
 	rep     replay.Report
 	dirty   bool
 	saveErr error
@@ -210,6 +211,7 @@ func (s *Shadow) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 func (s *Shadow) selectRequest(req *http.Request) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.offered++
 	if req.Method != http.MethodGet && req.Method != http.MethodHead && !s.opts.IncludeWrites {
 		s.rep.Shadow.WritesNotSent++
 		return false
@@ -273,7 +275,7 @@ func (s *Shadow) compare(ex *record.Exchange) {
 		s.mu.Unlock()
 		return
 	}
-	a := &replay.Answer{Status: ex.Status, Header: ex.RespHeader, Body: primaryBody}
+	a := &replay.Answer{Status: ex.Status, Header: s.reportHeaders(ex.RespHeader), Body: primaryBody}
 	uri := cfg.RedactURI(ex.URI)
 	path, _, _ := strings.Cut(uri, "?")
 	cr := replay.CaseReport{Name: fmt.Sprintf("%d %s %s", ex.ID, ex.Method, path), Method: ex.Method, Path: uri, StatusA: ex.Status}
@@ -282,6 +284,7 @@ func (s *Shadow) compare(ex *record.Exchange) {
 		cr.Outcome, cr.Reason = replay.Failed, "B: "+err.Error()
 	} else {
 		cr.StatusB = b.Status
+		b.Header = s.reportHeaders(b.Header)
 		cr.Diffs = s.cmp.Compare(a, b)
 		cr.Outcome = replay.Same
 		if len(cr.Diffs) > 0 {
@@ -349,6 +352,7 @@ func (s *Shadow) snapshot() replay.Report {
 	r := s.rep
 	r.Cases = append([]replay.CaseReport(nil), s.rep.Cases...)
 	st := *s.rep.Shadow
+	st.OutsideWhen = st.Requests - s.offered
 	st.NotMirroredWhy = map[string]int64{}
 	for k, v := range s.rep.Shadow.NotMirroredWhy {
 		st.NotMirroredWhy[k] = v
@@ -402,6 +406,20 @@ func (s *Shadow) Close() error {
 		err = s.save()
 	})
 	return err
+}
+
+// reportHeaders returns the headers with listed query values in Location
+// replaced, as record stores them, so a compared Location can't show them.
+func (s *Shadow) reportHeaders(h http.Header) http.Header {
+	loc := h.Values("Location")
+	if len(loc) == 0 {
+		return h
+	}
+	out := h.Clone()
+	for i, v := range loc {
+		out["Location"][i] = s.opts.Config.RedactURI(v)
+	}
+	return out
 }
 
 // requestHeaders drops the headers that belong to the client's connection

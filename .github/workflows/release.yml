@@ -233,6 +233,22 @@ jobs:
           [ "$(code http://127.0.0.1:18080/admin/users)" = 401 ]
           [ "$(code 'http://127.0.0.1:18080/status/..%2fadmin/users')" = 400 ]
           [ "$(code http://127.0.0.1:18080/status)" = 502 ]
+          # A live shadow with that guard as the primary and no candidate:
+          # the client gets the primary's answer, the report the error.
+          $PREFIX "$bin" shadow --primary http://127.0.0.1:18080 --candidate http://127.0.0.1:1 --listen 127.0.0.1:18081 --report shadow.md --audit-log "" &
+          spid=$!
+          for i in $(seq 1 50); do
+            curl -s -o /dev/null http://127.0.0.1:18081/_aftermarket/healthz && break
+            sleep 0.2
+          done
+          [ "$(code http://127.0.0.1:18081/debug/env)" = 404 ]
+          for i in $(seq 1 50); do
+            grep -q 'B: could not connect' shadow.md && break
+            sleep 0.2
+          done
+          cat shadow.md
+          grep -q '1 case(s): 0 same, 0 different, 0 skipped, 1 error(s)' shadow.md
+          kill $spid || true
           kill $gpid || true
           grep -q '"event":"denied"' guard.log
           grep -q '"event":"rejected"' guard.log

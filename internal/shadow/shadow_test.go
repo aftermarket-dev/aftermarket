@@ -756,3 +756,33 @@ func TestOptionsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// when: picks the traffic that is copied; the rest is counted as outside
+// when:. A compared Location keeps listed query values out of the report.
+func TestWhenAndLocation(t *testing.T) {
+	answer := func(who string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Location", "/next?token=loc-"+who+"&page="+who)
+			w.WriteHeader(302)
+		}
+	}
+	primary := httptest.NewServer(answer("p"))
+	defer primary.Close()
+	cand := httptest.NewServer(answer("c"))
+	defer cand.Close()
+	cfg, err := record.Load([]byte("version: 1\nwhen: {path: /api/**}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := start(t, primary.URL, cand.URL, shadow.Options{Config: cfg, Headers: []string{"Location"}})
+	tk.Do(t, "GET", h.url+"/api/x", nil, nil)
+	tk.Do(t, "GET", h.url+"/other", nil, nil)
+	r := h.stop(t)
+	if r.Shadow.Requests != 2 || r.Shadow.OutsideWhen != 1 || r.Shadow.Mirrored != 1 || r.Diff != 1 {
+		t.Fatalf("%+v %s", *r.Shadow, r.Summary())
+	}
+	d := strings.Join(r.Cases[0].Diffs, "|")
+	if strings.Contains(d, "loc-") || !strings.Contains(d, `"/next?token=REDACTED&page=p" vs "/next?token=REDACTED&page=c"`) {
+		t.Fatalf("diffs %q", d)
+	}
+}

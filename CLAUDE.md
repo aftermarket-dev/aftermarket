@@ -158,11 +158,11 @@ Steps (mark done as they land, push this file with the code):
 3. [done] record: Mirror, Select and Skipped hooks (record's own tests unchanged and green).
 4. [done] internal/shadow: queue, workers, sampling, report writer, stats; tests in internal/shadow/shadow_test.go also cover most of step 6 (byte-identical random traffic, bad candidates, full queue, live vs replay, credentials).
 5. [done] `aftermarket shadow` CLI (cmd/aftermarket/shadow.go, shadow_unix_test.go), usage text, CLI tests.
-6. [ ] Promise tests: byte-identical answers with and without shadowing (random traffic); dead, slow and erroring candidate add no latency beyond a small bound and never change an answer; live differences equal replay's on the same traffic; no credential reaches the report; queue full drops and counts.
+6. [done] Promise tests: byte-identical answers with and without shadowing (random traffic); dead, slow and erroring candidate add no latency beyond a small bound and never change an answer; live differences equal replay's on the same traffic; no credential reaches the report; queue full drops and counts.
 7. [done] examples/customer-api (TestShadowBeforeTheSwitch): shadow v1 against v2 directly (12 differ) and against v2 through adapt (12 same), as an e2e test.
-8. [ ] tools/record: shadow latency figures (same, dead, slow, failing candidate) [code done]; re-record test/results.
-9. [ ] README, docs/record.md (shadow section), CI example line, version 0.10.0.
-10. [ ] Independent review, fixes, re-record.
+8. [done] tools/record: shadow latency figures (same, dead, slow, failing candidate); test/results re-recorded, 554 of 554 (sqlite3 must be installed, or schema/bridge tests skip and count as not passed).
+9. [done] README, docs/record.md (shadow section), release smoke runs a live shadow, version 0.10.0. No CI example line: shadow needs live services.
+10. [done] Review: no subagent tool in this session, so a second pass of my own on the diff. It found two gaps, both fixed with tests: requests outside when: were not counted (now outside_when), and a compared Location header could show listed query values (now redacted like record does).
 11. [ ] Push, watch CI and release, check files, SHA256SUMS, latest links, run a downloaded binary.
 12. [ ] Site: post, AfterTest and AfterDiff reference, quick start, roadmap, feature lists, hero badge and figures; check the deploy once.
 

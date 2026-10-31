@@ -7,7 +7,7 @@ Aftermarket is one program, `aftermarket`, with a subcommand per tool. The tools
 - **AfterPatch** (`aftermarket patch`) fixes traffic with small rules you can read. Rename a JSON field, add or drop a header, move a path.
 - **AfterAPI** (`aftermarket adapt`) keeps an old client working after its API was replaced. You describe each old endpoint in terms of the new one, and adapt translates the request on the way in and rebuilds the old response on the way out.
 - **AfterTest** (`aftermarket record`) saves real traffic as test fixtures, with credentials and any values you list blanked out.
-- **AfterDiff** (`aftermarket replay`) sends those fixtures to two versions of a service and reports where the answers differ.
+- **AfterDiff** (`aftermarket replay`) sends those fixtures to two versions of a service and reports where the answers differ. Its live mode, `aftermarket shadow`, serves real traffic from the current version and quietly sends a copy of each request to the new one, to compare the answers before you switch.
 - **AfterConfig** (`aftermarket config`) changes a vendor's config file through an overlay, without ever editing the file, and stops when an upgrade changed something your overlay relies on.
 - **AfterHook** (`aftermarket hook`) watches files, folders, HTTP endpoints and command output that change without telling anyone, and sends a signed webhook for each change.
 - **AfterGuard** (`aftermarket guard`) stands in front of an app that can't protect itself, such as an old admin panel with no login, and turns away requests that break your rules: no credential, wrong network, too many tries, or a request that could be read two ways.
@@ -18,7 +18,7 @@ It's a single Go binary with no dependencies, licensed under Apache 2.0. Website
 
 ## Which tool?
 
-Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know. Use **guard** when an app has no login, no rate limits or a page that should never have been public, and you can't change the app. Use **schema** when the database under an old app was reorganised and the app's queries, reports or scripts still expect the old tables. Use **bridge** when an app only hands its data over as files, and something else needs it as an API.
+Use **patch** when one thing is off: a renamed field, a missing header, an endpoint that moved but otherwise answers the same way. Use **adapt** when a whole API changed shape, and you'd rather write down what the old one looked like than stack up a dozen small edits. Use **record** and **replay** to find out what changed in the first place, and to prove a repair works on real traffic. Use **shadow** when a recording can't cover everything and you want live traffic to test the new version without any client noticing. Use **config** when the thing you can't change is a vendor's config file that every upgrade overwrites. Use **hook** when software changes data but never says so, and something else needs to know. Use **guard** when an app has no login, no rate limits or a page that should never have been public, and you can't change the app. Use **schema** when the database under an old app was reorganised and the app's queries, reports or scripts still expect the old tables. Use **bridge** when an app only hands its data over as files, and something else needs it as an API.
 
 ## AfterPatch in one example
 
@@ -137,7 +137,16 @@ replay compares status codes, `Content-Type` and bodies. JSON is compared by mea
 - error: only in B (an object)
 ```
 
-By default replay sends only GET and HEAD requests, so it can't change data; `--include-writes` sends the rest. It exits 1 when anything differs, so it fits in CI. In the customer-api example, the old client's twelve checks are recorded against v1. Replayed against v2 directly, all twelve differ. Replayed against v2 through adapt, all twelve answers are the same. The full format is in [docs/record.md](docs/record.md).
+By default replay sends only GET and HEAD requests, so it can't change data; `--include-writes` sends the rest. It exits 1 when anything differs, so it fits in CI. In the customer-api example, the old client's twelve checks are recorded against v1. Replayed against v2 directly, all twelve differ. Replayed against v2 through adapt, all twelve answers are the same.
+
+Before switching for real, shadow compares the two versions on live traffic:
+
+```sh
+aftermarket shadow --primary http://127.0.0.1:9001 --candidate http://127.0.0.1:8080 \
+  --listen 127.0.0.1:8090 --report shadow-report.md
+```
+
+Clients talk to shadow and get the primary's answers, byte for byte. When an answer has gone out, a copy of the request goes to the candidate in the background, and the two answers are compared the way replay compares them. `shadow-report.md` is rewritten as differences come in, in replay's format, with counts of what was copied and what wasn't. The candidate can't slow clients down or change what they get: copies wait in a bounded queue that drops and counts them when it's full, and the candidate has its own timeout. `--sample 0.1` copies one request in ten. The record config's `when:` picks the traffic and its `redact:` lists keep values out of the report. In the customer-api example, the old client's suite run live through shadow gives the same twelve-of-twelve results as replay, and the client passes all twelve checks while it runs. The full format is in [docs/record.md](docs/record.md).
 
 ## AfterConfig in one example
 
@@ -367,6 +376,10 @@ aftermarket record check --config record.yaml
 aftermarket replay --fixture fixture.yaml --a URL [--b URL] [--include-writes]
                    [--ignore PATH] [--header NAME] [--set-header "Name: value"]
                    [--report FILE] [--json FILE]
+aftermarket shadow --primary URL --candidate URL [--config record.yaml] [--listen ADDR]
+                   [--report FILE] [--json FILE] [--sample F] [--include-writes]
+                   [--queue N] [--workers N] [--candidate-timeout D]
+                   [--ignore PATH] [--header NAME] [--audit-log FILE|-]
 
 aftermarket config check --overlay overlay.yaml [--base FILE]
 aftermarket config diff  --overlay overlay.yaml [--base FILE]
@@ -401,6 +414,7 @@ aftermarket version
 - **`test`** runs saved requests and responses through the proxy against a stand-in upstream and compares the results with what you expect. All the tools use the same fixture format, so a recording from `record` can be run with `patch test` or `adapt test`. It exits 1 if any case fails, so it fits in CI.
 - **`record`** never overwrites a file: `--out` must not exist yet. The file is a valid fixture after every case, so stop it with Ctrl-C whenever you have enough.
 - **`replay`** without `--b` compares one service with the answers in the recording.
+- **`shadow`** runs until Ctrl-C, then waits up to `--candidate-timeout` for queued copies, writes the final report and prints the summary.
 - The proxy answers `GET /_aftermarket/healthz` itself with `200 ok`. It sits under `/_aftermarket/` so it never hides an upstream `/healthz`. Change it with `--health-path`, or pass an empty value to turn it off.
 
 ## What the tools promise
@@ -417,6 +431,7 @@ The main promise is that a repair changes what it's meant to change and breaks n
 - **Dry run changes zero bytes**, and never turns a slow answer into an error. The tests check both.
 - **Recording changes zero bytes too**, and streams. Credential headers and query keys are always saved as `REDACTED`, and so are the headers, query keys and JSON fields you list; the tests send secrets both ways and search the file for them. Values in a URL path and in bodies that aren't JSON are saved as sent. An exchange that can't be stored safely (too big, not text, compressed in a way record can't read, or cut off) still passes through and is logged as skipped.
 - **Replay doesn't change data unless you ask.** Only GET and HEAD are sent without `--include-writes`.
+- **shadow never changes what a client gets, and the candidate can't slow it down.** Answers pass through byte for byte, as with record. The copy goes to the candidate only after the primary's answer is complete, through a bounded queue that drops and counts rather than waits. The tests send hundreds of random requests with and without shadowing and compare every byte, and time requests while the candidate is down, slow, hanging, failing or dropping connections. Differences found live are the ones replay finds on the same traffic, and no credential or listed value reaches the report.
 - **hook delivers every change at least once.** Each change gives exactly one event, nothing is lost while the receiver is down or across restarts, and a repeat after a crash carries the same id. Values under secret-looking keys are sent as `REDACTED`, and the signing secret never leaves the environment.
 - **guard lets through only what the rules allow, and nothing that could be read two ways.** A request turned away never reaches the app, allowed traffic passes byte for byte, rate limits hold with many clients at once and can't be used to fill memory, a client can't set its own identity or address, and no credential reaches the log. The tests check each of these.
 - **config never writes the vendor's file,** whatever path you give `--out`. A failed apply leaves the old output as it was, and applying twice gives the same bytes. Values under keys such as `password` or `token` are never printed.
@@ -439,6 +454,7 @@ Recorded results, including the latency each tool adds, are in [test/results](te
 - AfterSchema's views serve reads; an old app that writes to a mapped table gets an error from SQLite. An old table whose name the new schema still uses for a table can't get a view. SQLite only.
 - AfterBridge only reads: no writes, no logins (put AfterGuard in front), no joins across sources, and filters are exact matches. A whole source is held in memory. An export written with pauses longer than `settle` can be read between them; writing to another name and renaming avoids that.
 - One upstream per proxy. Run one proxy per service.
+- shadow copies a request only after the primary has answered it, so the candidate sees requests a moment later and, with several workers, not always in order. Writes reach the candidate in order only with `--workers 1`, and the candidate needs its own data. Like record, it keeps listed values out of the report, but values in a URL path and in JSON fields it isn't told about can show in a difference.
 - record redacts headers, query values and JSON fields. Values in a URL path and in bodies that aren't JSON are stored as sent, so keep those out with `when:`. Binary bodies aren't recorded at all.
 
 ## Building and testing
@@ -450,7 +466,7 @@ go run ./tools/record   # run everything and write test/results
 
 ## Status and plans
 
-0.9.0 adds `aftermarket bridge` (AfterBridge). 0.8.0 added `aftermarket schema` (AfterSchema), 0.7.0 added TOML to `aftermarket config`, 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
+0.10.0 adds `aftermarket shadow`, AfterDiff's live mode. 0.9.0 added `aftermarket bridge` (AfterBridge), 0.8.0 added `aftermarket schema` (AfterSchema), 0.7.0 added TOML to `aftermarket config`, 0.6.0 added `aftermarket guard` (AfterGuard), 0.5.0 added `aftermarket hook` (AfterHook), 0.4.0 added `aftermarket config` (AfterConfig), 0.3.0 added `aftermarket record` and `replay` (AfterTest and AfterDiff), and 0.2.0 added `aftermarket adapt` (AfterAPI). What comes next is decided one tool at a time; the plan is on [aftermarket.dev/roadmap](https://aftermarket.dev/roadmap/).
 
 Questions and problems: open an [issue](https://github.com/aftermarket-dev/aftermarket/issues) or write to info@aftermarket.dev.
 

@@ -74,6 +74,7 @@ type Report struct {
 // difference or an error are listed in Cases; the counts cover every case.
 type ShadowStats struct {
 	Requests         int64            `json:"requests"`           // requests served from the primary (health checks not counted)
+	OutsideWhen      int64            `json:"outside_when"`       // left out by the config's when:
 	Mirrored         int64            `json:"mirrored"`           // queued for the candidate
 	SampledOut       int64            `json:"sampled_out"`        // left out by --sample
 	WritesNotSent    int64            `json:"writes_not_sent"`    // methods other than GET and HEAD, without --include-writes
@@ -385,8 +386,8 @@ func (r *Report) WriteMarkdown(w io.Writer) error {
 		fmt.Fprintf(&b, "\n## Traffic\n\n")
 		fmt.Fprintf(&b, "- Started %s, updated %s\n", s.Started, s.Updated)
 		fmt.Fprintf(&b, "- %d request(s) served from A; %d copied to B\n", s.Requests, s.Mirrored)
-		fmt.Fprintf(&b, "- Not copied: %d left out by sampling (%g), %d writes without --include-writes, %d dropped because the queue (%d) was full, %d that couldn't be compared safely\n",
-			s.SampledOut, s.Sample, s.WritesNotSent, s.Dropped, s.Queue, s.NotMirrored)
+		fmt.Fprintf(&b, "- Not copied: %d outside when:, %d left out by sampling (%g), %d writes without --include-writes, %d dropped because the queue (%d) was full, %d that couldn't be compared safely\n",
+			s.OutsideWhen, s.SampledOut, s.Sample, s.WritesNotSent, s.Dropped, s.Queue, s.NotMirrored)
 		if s.NotCompared > 0 {
 			fmt.Fprintf(&b, "- Copied but not compared: %d (the primary's answer couldn't be read the way replay reads it)\n", s.NotCompared)
 		}

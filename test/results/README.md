@@ -2,13 +2,13 @@
 
 Written by `go run ./tools/record`. Do not edit by hand.
 
-- Version: 0.9.0
-- Recorded: 2026-10-22T05:15:45Z
+- Version: 0.10.0
+- Recorded: 2026-10-31T09:35:36Z
 - Machine: linux/amd64, 2 CPUs, go1.24.7
 
 ## Tests
 
-530 of 530 tests passed (race detector on).
+554 of 554 tests passed (race detector on).
 
 | Package | Test | Result |
 | --- | --- | --- |
@@ -30,6 +30,8 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | cmd/aftermarket | TestSchemaCompatApplies | pass |
 | cmd/aftermarket | TestSchemaDiffMapMustCompile | pass |
 | cmd/aftermarket | TestSchemaRefusesShellCommands | pass |
+| cmd/aftermarket | TestShadowCommand | pass |
+| cmd/aftermarket | TestShadowCommandChecksItsFlags | pass |
 | cmd/aftermarket | TestTestExample | pass |
 | cmd/aftermarket | TestTestFailingFixture | pass |
 | cmd/aftermarket | TestUsage | pass |
@@ -39,6 +41,7 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | examples/customer-api | TestFixtureFilePasses | pass |
 | examples/customer-api | TestOldClientPassesThroughAdapt | pass |
 | examples/customer-api | TestRecordedSuiteReplaysTheSameThroughAdapt | pass |
+| examples/customer-api | TestShadowBeforeTheSwitch | pass |
 | examples/customer-api | TestV2BreaksTheOldClient | pass |
 | examples/legacy-admin | TestFixturePasses | pass |
 | examples/legacy-admin | TestTheAdminPanelBeforeAndAfter | pass |
@@ -330,6 +333,8 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/record | TestUpstreamURLSecretsStayOut | pass |
 | internal/record | TestWhenPicksTrafficAndMaxCasesStops | pass |
 | internal/replay | TestBadOptions | pass |
+| internal/replay | TestCompareIsReplaysComparison | pass |
+| internal/replay | TestCompareMasksValues | pass |
 | internal/replay | TestDifferencesAreListedByPath | pass |
 | internal/replay | TestDiffsAreCapped | pass |
 | internal/replay | TestGzipAnswersAreComparedDecoded | pass |
@@ -368,6 +373,19 @@ Written by `go run ./tools/record`. Do not edit by hand.
 | internal/schema | TestSQLIsStable | pass |
 | internal/schema | TestVerifyFindsBadExpressions | pass |
 | internal/schema | TestVirtualTables | pass |
+| internal/shadow | TestAnswersAreByteIdenticalWithShadowing | pass |
+| internal/shadow | TestBadCandidatesAddNoLatency | pass |
+| internal/shadow | TestCandidateGetsTheRequestAsSent | pass |
+| internal/shadow | TestConcurrentShadowing | pass |
+| internal/shadow | TestCredentialsNeverReachTheReport | pass |
+| internal/shadow | TestFullQueueDropsAndCounts | pass |
+| internal/shadow | TestLiveDifferencesMatchReplay | pass |
+| internal/shadow | TestNotMirroredAndListingLimit | pass |
+| internal/shadow | TestOptionsAreChecked | pass |
+| internal/shadow | TestReportIsWrittenWhileRunning | pass |
+| internal/shadow | TestSamplingAndWrites | pass |
+| internal/shadow | TestStopDoesNotWaitForever | pass |
+| internal/shadow | TestWhenAndLocation | pass |
 | internal/sqlitecli | TestErrorLinesPointIntoTheFile | pass |
 | internal/sqlitecli | TestErrorsNameTheirPart | pass |
 | internal/sqlitecli | TestExactIsExact | pass |
@@ -386,19 +404,36 @@ Written by `go run ./tools/record`. Do not edit by hand.
 
 Over loopback, 20,000 sequential requests per row after a 2,000 request warm-up, then 16 clients for 2 seconds. The first three rows are patch with the legacy-customer example; the adapt rows are the customer-api example, where the list has three customers. The record row saves every exchange to a fixture file on disk.
 
+The shadow rows serve the same v2 lookup from the primary while copies go to a candidate in the background (queue 64, 4 workers, candidate timeout 5 s). Every answer in every row was checked; a wrong one stops the recording.
+
 | Path | p50 | p99 | Requests/s (16 clients) |
 | --- | --- | --- | --- |
-| direct to upstream | 28.3 µs | 159.7 µs | 36238 |
-| proxy, no rule matches | 85.1 µs | 814.0 µs | 10216 |
-| proxy, both example rules applied | 142.3 µs | 1353.3 µs | 9297 |
-| adapt: direct to v2, one customer | 30.0 µs | 252.8 µs | 36270 |
-| adapt: v1 lookup rebuilt from v2 | 118.7 µs | 1408.1 µs | 8489 |
-| adapt: direct to v2, list | 31.4 µs | 228.7 µs | 31352 |
-| adapt: v1 list rebuilt from v2 | 151.0 µs | 1913.4 µs | 8375 |
-| record: v2 lookup saved to a fixture | 143.3 µs | 1157.8 µs | 8115 |
+| direct to upstream | 68.9 µs | 4498.4 µs | 6259 |
+| proxy, no rule matches | 223.5 µs | 6848.5 µs | 1341 |
+| proxy, both example rules applied | 245.2 µs | 2326.8 µs | 1916 |
+| adapt: direct to v2, one customer | 56.5 µs | 2159.7 µs | 7550 |
+| adapt: v1 lookup rebuilt from v2 | 240.3 µs | 3012.8 µs | 362 |
+| adapt: direct to v2, list | 57.6 µs | 410.1 µs | 2663 |
+| adapt: v1 list rebuilt from v2 | 305.6 µs | 3301.1 µs | 1308 |
+| record: v2 lookup saved to a fixture | 253.9 µs | 3052.4 µs | 1391 |
+| shadow: candidate answers the same | 270.3 µs | 8582.0 µs | 1272 |
+| shadow: candidate down | 273.4 µs | 8331.0 µs | 991 |
+| shadow: candidate slow (1 s per answer) | 205.6 µs | 5818.1 µs | 977 |
+| shadow: candidate fails (500) | 264.9 µs | 9176.1 µs | 703 |
 
-Added by the proxy when no rule matches: 56.8 µs at p50, 654.3 µs at p99.
-Added by the proxy with both example rules applied: 114.0 µs at p50, 1193.6 µs at p99.
-Added by adapt rebuilding a v1 lookup from v2: 88.7 µs at p50, 1155.3 µs at p99.
-Added by adapt rebuilding a v1 list from v2: 119.6 µs at p50, 1684.7 µs at p99.
-Added by record saving a v2 lookup to a fixture file: 113.3 µs at p50, 905.0 µs at p99.
+Added by the proxy when no rule matches: 154.6 µs at p50, 2350.1 µs at p99.
+Added by the proxy with both example rules applied: 176.3 µs at p50, -2171.5 µs at p99.
+Added by adapt rebuilding a v1 lookup from v2: 183.8 µs at p50, 853.1 µs at p99.
+Added by adapt rebuilding a v1 list from v2: 248.0 µs at p50, 2891.0 µs at p99.
+Added by record saving a v2 lookup to a fixture file: 197.4 µs at p50, 892.7 µs at p99.
+
+## Shadow
+
+Time added on the primary path, against a direct call to v2, and what happened to the copies over all requests of the row.
+
+| Candidate | Added p50 | Added p99 | Requests | Copied | Dropped (queue full) | Same | Different | Errors |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| candidate answers the same | 213.8 µs | 6422.3 µs | 24566 | 23617 | 949 | 23617 | 0 | 0 |
+| candidate down | 216.9 µs | 6171.3 µs | 23987 | 23987 | 0 | 0 | 0 | 23987 |
+| candidate slow (1 s per answer) | 149.1 µs | 3658.4 µs | 23966 | 112 | 23854 | 112 | 0 | 0 |
+| candidate fails (500) | 208.4 µs | 7016.4 µs | 23419 | 22982 | 437 | 0 | 22982 | 0 |
