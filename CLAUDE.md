@@ -133,15 +133,8 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 - Not in 0.9.0: writes, authentication (put AfterGuard in front), joins across sources, XML or fixed-width files, other databases.
 - No new dependencies.
 
-### Later, decided with the owner at the time
-Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
-
-## In progress: live shadow mode (0.10.0, started Oct 31 2026)
-
-Asked for by the owner on Oct 31 2026. A fresh session or ChatGPT continues from this section alone.
-
-What and why: AfterDiff (`replay`) compares two versions of a service on recorded fixtures. Shadow mode does the same on live traffic: a proxy serves every request from the primary (current) service unchanged, mirrors a copy to the candidate (new) service in the background, compares the two answers with replay's own comparison and ignore rules, and keeps a running diff report. It finds what a recording missed, before the switch. The client only ever sees the primary's answer, and the candidate can never slow down or break the primary path.
-
+### 0.10.0 Live shadow mode for AfterDiff (asked for by the owner Oct 31 2026; details left to Claude)
+`aftermarket shadow`: replay on live traffic. Serve from the primary unchanged, copy each finished exchange to the candidate in the background, compare with replay's comparison, keep a running report.
 Design decisions:
 - Command: a new subcommand, `aftermarket shadow --primary URL --candidate URL [--config record.yaml] [--listen ADDR] [--report FILE] [--json FILE] [--sample F] [--queue N] [--workers N] [--candidate-timeout D] [--include-writes] [--ignore PATH] [--header NAME] [--audit-log FILE|-] [--health-path PATH]`. replay is a batch command that ends with an exit status; shadow is a long-running proxy like record, so it gets its own subcommand (documented as AfterDiff's live mode), the same way record and replay are separate.
 - Primary path: record's pass-through proxy (internal/record), unchanged bytes, streaming, every existing safety rule (WatchBody, 408/400/502/504, upgrades). record.Options gets a `Mirror` hook called with the raw finished exchange instead of redacting and writing it; without the hook record behaves exactly as before.
@@ -152,21 +145,9 @@ Design decisions:
 - Redaction: the record config's redact lists apply to everything written: query values in listed keys read REDACTED in report paths; a compared header on the redact list shows REDACTED; a JSON difference at a redacted path reads "differs (REDACTED)" without values. Upstream URLs go through httpx.SafeURL. Real credentials are still sent to the candidate, as the primary got them.
 - No new dependencies. Version 0.10.0 (minor bump).
 
-Steps (mark done as they land, push this file with the code):
-1. [done] Plan in CLAUDE.md, pushed with [skip ci].
-2. [done] replay: export Send and Compare (masking for redacted paths), no behaviour change, tests green.
-3. [done] record: Mirror, Select and Skipped hooks (record's own tests unchanged and green).
-4. [done] internal/shadow: queue, workers, sampling, report writer, stats; tests in internal/shadow/shadow_test.go also cover most of step 6 (byte-identical random traffic, bad candidates, full queue, live vs replay, credentials).
-5. [done] `aftermarket shadow` CLI (cmd/aftermarket/shadow.go, shadow_unix_test.go), usage text, CLI tests.
-6. [done] Promise tests: byte-identical answers with and without shadowing (random traffic); dead, slow and erroring candidate add no latency beyond a small bound and never change an answer; live differences equal replay's on the same traffic; no credential reaches the report; queue full drops and counts.
-7. [done] examples/customer-api (TestShadowBeforeTheSwitch): shadow v1 against v2 directly (12 differ) and against v2 through adapt (12 same), as an e2e test.
-8. [done] tools/record: shadow latency figures (same, dead, slow, failing candidate); test/results re-recorded, 554 of 554 (sqlite3 must be installed, or schema/bridge tests skip and count as not passed).
-9. [done] README, docs/record.md (shadow section), release smoke runs a live shadow, version 0.10.0. No CI example line: shadow needs live services.
-10. [done] Review: no subagent tool in this session, so a second pass of my own on the diff. It found two gaps, both fixed with tests: requests outside when: were not counted (now outside_when), and a compared Location header could show listed query values (now redacted like record does).
-11. [ ] Push, watch CI and release, check files, SHA256SUMS, latest links, run a downloaded binary.
-12. [ ] Site: post, AfterTest and AfterDiff reference, quick start, roadmap, feature lists, hero badge and figures; check the deploy once.
 
-Resume at the first unchecked step. Work so far lives on main only.
+### Later, decided with the owner at the time
+Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
 ## Status
 
@@ -220,6 +201,9 @@ Resume at the first unchecked step. Work so far lives on main only.
 - Oct 22 2026: 0.9.0 AfterBridge built (internal/bridge, `bridge serve|check|convert|test`, examples/legacy-exports, docs/bridge.md). Writing the bridge turned up two real gaps, fixed before review: a version cut off at a line boundary was served when the writer paused longer than a check (CSV files are now read only after `settle`, 2s by default), and Go's CSV reader skips blank lines, which loses rows in a one-column file (blank lines are now refused). Independent review found 1 high issue (a `.sql` dump cut off between statements was served as complete) and 2 medium ones (a modification time in the future hung startup with no health answer; text that isn't UTF-8 came out of sqlite3's JSON mode mangled) plus 11 low ones (big integers rounded in number columns, Go-only number spellings, CRLF in quoted values, 0 and -0 keys, unknown query names logged, convert guard bypassed by a linked folder, filters on hidden columns, an item path hiding a fixed path, no inode in the fingerprint, unclear limits). Fixes: settle counts on the bridge's own clock from first sight (or an older modification time), dumps settle and must end with a line break, `;` and no open transaction, SQLite text read as hex and checked, numbers decimal only, serve listens before reading sources, only known query names logged, fixed paths first, inode and change time in the fingerprint. A short second review confirmed every fix and found low ones (OpenBSD build, sqlite3 output cap halved by hex, big whole numbers in CSV number columns, a dump cut inside a statement), also fixed. Every finding has a test. 530 tests recorded. Version raised to 0.9.0 for the automated release.
 
 - Oct 22 2026: 0.9.0 released and verified. The first release run's Linux smoke failed: serve now answers before its sources are read, and the smoke asked for /orders right after the health check (reproduced here: health 200, orders 503); the smoke now waits for /orders/1003, and the second run published. All archives, SHA256SUMS, latest links; the downloaded binary ran check, the 8-case fixture and a live serve: filters, keys, 404, 400 and 405 as documented; a next-night export written in two pieces kept the old day served until it settled, then the new one; an export with "twelve" in a number column was refused and logged once while the last good day stayed; a stock update in the database showed at the next check; convert wrote the products. Site (dated Oct 22 by UTC): AfterBridge reference (/bridge-reference/, from docs/bridge.md), quick start part eight, use case, roadmap, concepts, architecture, about, home, download and reference pages, release, testing and case study posts; hero now 530 tests, "Nine tools are out" and the badge "AfterBridge in 0.9.0". softdevstudio.com note published (row 2k). Both Cloudflare deploys succeeded.
+
+- Oct 31 2026: 0.10.0 live shadow mode for AfterDiff built (internal/shadow, `aftermarket shadow`, replay.Send/Compare/Comparison with masks, record Options.Select/Mirror/Skipped, shadow block in replay's report, shadow section in docs/record.md, customer-api TestShadowBeforeTheSwitch, live shadow in release smoke, shadow rows in tools/record). Promise tests: 300 random requests byte-identical with shadowing on and an unruly candidate; dead, slow, hanging, failing and resetting candidates (no request over 400ms while the slow one takes 1s, every answer right); full queue drops and counts; live differences equal replay's on the same traffic, case by case, and on the customer-api suite (12 same through adapt, 12 different directly); no credential, listed query value, header or JSON value in either report or the log. No subagent tool in this session, so the review was a second pass of my own: it found requests outside when: uncounted and a compared Location header able to show listed query values; both fixed with tests. 554 tests recorded (sqlite3 must be installed for the recorder, or schema and bridge tests skip and count as not passed). Shadow added about 150 to 220 µs at p50 against a direct call, close to record's 197 µs; p99 was noisy (3.7 to 7 ms) because the shared two-core workspace was busy with other jobs. First CI run on the CLI commit failed on gofmt of a test file, fixed in the next commit. The task brief said CI is pinned to ubuntu-24.04; it isn't (moved back to ubuntu-latest on Oct 21 at the owner's choice), and it was left as it is.
+- Oct 31 2026: 0.10.0 released and verified (all archives, SHA256SUMS, latest links; release smoke ran a live shadow on every platform). The downloaded binary ran the customer-api suite live through shadow with v1 as primary: 12 checks passed both times, the report read 12 of 12 same against v2 through adapt and 12 of 12 different against v2 directly.
 
 ## Next
 
