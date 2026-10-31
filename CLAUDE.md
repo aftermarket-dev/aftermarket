@@ -157,10 +157,10 @@ Steps (mark done as they land, push this file with the code):
 2. [done] replay: export Send and Compare (masking for redacted paths), no behaviour change, tests green.
 3. [done] record: Mirror, Select and Skipped hooks (record's own tests unchanged and green).
 4. [done] internal/shadow: queue, workers, sampling, report writer, stats; tests in internal/shadow/shadow_test.go also cover most of step 6 (byte-identical random traffic, bad candidates, full queue, live vs replay, credentials).
-5. [ ] `aftermarket shadow` CLI, usage text, CLI tests.
+5. [done] `aftermarket shadow` CLI (cmd/aftermarket/shadow.go, shadow_unix_test.go), usage text, CLI tests.
 6. [ ] Promise tests: byte-identical answers with and without shadowing (random traffic); dead, slow and erroring candidate add no latency beyond a small bound and never change an answer; live differences equal replay's on the same traffic; no credential reaches the report; queue full drops and counts.
-7. [ ] examples/customer-api: shadow v1 against v2 directly (12 differ) and against v2 through adapt (12 same), as an e2e test.
-8. [ ] tools/record: shadow latency figures (no candidate, dead, slow, erroring); re-record test/results.
+7. [done] examples/customer-api (TestShadowBeforeTheSwitch): shadow v1 against v2 directly (12 differ) and against v2 through adapt (12 same), as an e2e test.
+8. [ ] tools/record: shadow latency figures (same, dead, slow, failing candidate) [code done]; re-record test/results.
 9. [ ] README, docs/record.md (shadow section), CI example line, version 0.10.0.
 10. [ ] Independent review, fixes, re-record.
 11. [ ] Push, watch CI and release, check files, SHA256SUMS, latest links, run a downloaded binary.

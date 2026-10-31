@@ -29,6 +29,7 @@ import (
 	"github.com/aftermarket-dev/aftermarket/internal/patch"
 	"github.com/aftermarket-dev/aftermarket/internal/record"
 	"github.com/aftermarket-dev/aftermarket/internal/rules"
+	"github.com/aftermarket-dev/aftermarket/internal/shadow"
 	"github.com/aftermarket-dev/aftermarket/internal/version"
 )
 
@@ -75,6 +76,23 @@ type report struct {
 	// record saving every exchange of the customer-api v2 lookup
 	RecordP50 float64 `json:"record_added_p50_us"`
 	RecordP99 float64 `json:"record_added_p99_us"`
+	// shadow serving the v2 lookup and copying it to candidates that answer
+	// the same, are down, are slow or fail
+	Shadow []shadowRun `json:"shadow"`
+}
+
+// shadowRun is one shadow latency row: the time added on the primary path
+// against a direct call, and what happened to the copies.
+type shadowRun struct {
+	Name      string  `json:"name"`
+	AddedP50  float64 `json:"added_p50_us"`
+	AddedP99  float64 `json:"added_p99_us"`
+	Requests  int64   `json:"requests"`
+	Mirrored  int64   `json:"mirrored"`
+	Dropped   int64   `json:"dropped_queue_full"`
+	Same      int     `json:"same"`
+	Different int     `json:"different"`
+	Errors    int     `json:"errors"`
 }
 
 func main() {
@@ -107,7 +125,7 @@ func main() {
 	fmt.Printf("tests: %d passed, %d failed\n", rep.TestsPassed, rep.TestsFailed)
 
 	fmt.Println("measuring latency")
-	lat, err := measure()
+	lat, shadows, err := measure()
 	if err != nil {
 		fail(err)
 	}
@@ -126,6 +144,12 @@ func main() {
 	rep.AdaptListP99 = round(byName["adapt: v1 list rebuilt from v2"].P99Micros - byName["adapt: direct to v2, list"].P99Micros)
 	rep.RecordP50 = round(byName["record: v2 lookup saved to a fixture"].P50Micros - byName["adapt: direct to v2, one customer"].P50Micros)
 	rep.RecordP99 = round(byName["record: v2 lookup saved to a fixture"].P99Micros - byName["adapt: direct to v2, one customer"].P99Micros)
+	for _, sr := range shadows {
+		l := byName[sr.Name]
+		sr.AddedP50 = round(l.P50Micros - byName["adapt: direct to v2, one customer"].P50Micros)
+		sr.AddedP99 = round(l.P99Micros - byName["adapt: direct to v2, one customer"].P99Micros)
+		rep.Shadow = append(rep.Shadow, sr)
+	}
 
 	b, _ := json.MarshalIndent(rep, "", "  ")
 	if err := os.WriteFile(filepath.Join(outDir, "results.json"), append(b, '\n'), 0o644); err != nil {
@@ -221,17 +245,17 @@ func serve(h http.Handler) (string, func()) {
 	return "http://" + ln.Addr().String(), func() { srv.Close() }
 }
 
-func measure() ([]latencyResult, error) {
+func measure() ([]latencyResult, []shadowRun, error) {
 	svcURL, stopSvc := serve(legacycustomer.NewService())
 	defer stopSvc()
 	cfg, err := rules.LoadFile("examples/legacy-customer/rules.yaml")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	u, _ := url.Parse(svcURL)
 	px, err := patch.New(patch.Options{Upstream: u, Config: cfg})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pxURL, stopPx := serve(px)
 	defer stopPx()
@@ -241,12 +265,12 @@ func measure() ([]latencyResult, error) {
 	defer stopV2()
 	acfg, err := adapt.LoadFile("examples/customer-api/adapt.yaml")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	v2u, _ := url.Parse(v2URL)
 	apx, err := adapt.New(adapt.Options{Upstream: v2u, Config: acfg})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	apxURL, stopApx := serve(apx)
 	defer stopApx()
@@ -255,16 +279,61 @@ func measure() ([]latencyResult, error) {
 	// real file.
 	fxFile, err := os.CreateTemp("", "aftermarket-record-*.yaml")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer os.Remove(fxFile.Name())
 	defer fxFile.Close()
 	rpx, err := record.New(record.Options{Upstream: v2u, Out: fxFile})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	rpxURL, stopRpx := serve(rpx)
 	defer stopRpx()
+
+	// shadow serving the same v2 lookup, copying to four kinds of candidate.
+	v2bURL, stopV2b := serve(customerapi.NewV2())
+	defer stopV2b()
+	slowURL, stopSlow := serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(time.Second)
+		customerapi.NewV2().ServeHTTP(w, r)
+	}))
+	defer stopSlow()
+	failURL, stopFail := serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "candidate failed", http.StatusInternalServerError)
+	}))
+	defer stopFail()
+	dead, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, nil, err
+	}
+	deadURL := "http://" + dead.Addr().String()
+	dead.Close()
+	type shadowCase struct {
+		name, candidate string
+		sh              *shadow.Shadow
+		url             string
+	}
+	shadowCases := []*shadowCase{
+		{name: "shadow: candidate answers the same", candidate: v2bURL},
+		{name: "shadow: candidate down", candidate: deadURL},
+		{name: "shadow: candidate slow (1 s per answer)", candidate: slowURL},
+		{name: "shadow: candidate fails (500)", candidate: failURL},
+	}
+	reportDir, err := os.MkdirTemp("", "aftermarket-shadow-")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer os.RemoveAll(reportDir)
+	for i, sc := range shadowCases {
+		cu, _ := url.Parse(sc.candidate)
+		sc.sh, err = shadow.New(shadow.Options{Primary: v2u, Candidate: cu, ReportPath: filepath.Join(reportDir, fmt.Sprintf("r%d.md", i))})
+		if err != nil {
+			return nil, nil, err
+		}
+		var stop func()
+		sc.url, stop = serve(sc.sh)
+		defer stop()
+	}
 
 	cases := []struct {
 		name, url, want string
@@ -278,6 +347,9 @@ func measure() ([]latencyResult, error) {
 		{"adapt: v1 list rebuilt from v2", apxURL + "/api/v1/customers", `[{"customer_id":7,`},
 		{"record: v2 lookup saved to a fixture", rpxURL + "/api/v2/customers/7", `"full_name":"Ada Lovelace"`},
 	}
+	for _, sc := range shadowCases {
+		cases = append(cases, struct{ name, url, want string }{sc.name, sc.url + "/api/v2/customers/7", `"full_name":"Ada Lovelace"`})
+	}
 	client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 64, DisableCompression: true}}
 	get := func(u, want string) (time.Duration, error) {
 		start := time.Now()
@@ -288,7 +360,7 @@ func measure() ([]latencyResult, error) {
 		b, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		d := time.Since(start)
-		if err != nil || !bytes.Contains(b, []byte(want)) {
+		if err != nil || resp.StatusCode != 200 || !bytes.Contains(b, []byte(want)) {
 			return 0, fmt.Errorf("unexpected answer from %s: %s", u, b)
 		}
 		return d, nil
@@ -299,14 +371,14 @@ func measure() ([]latencyResult, error) {
 	for _, c := range cases {
 		for i := 0; i < warm; i++ {
 			if _, err := get(c.url, c.want); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		ds := make([]time.Duration, 0, n)
 		for i := 0; i < n; i++ {
 			d, err := get(c.url, c.want)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			ds = append(ds, d)
 		}
@@ -353,13 +425,24 @@ func measure() ([]latencyResult, error) {
 		}
 		wg.Wait()
 		if firstErr != nil {
-			return nil, firstErr
+			return nil, nil, firstErr
 		}
 		r.ReqPerSec = float64(int64(float64(count) / time.Since(start).Seconds()))
 		fmt.Printf("  %-36s p50 %6.1fus  p99 %6.1fus  %8.0f req/s\n", c.name, r.P50Micros, r.P99Micros, r.ReqPerSec)
 		out = append(out, r)
 	}
-	return out, nil
+	var shadows []shadowRun
+	for _, sc := range shadowCases {
+		if err := sc.sh.Close(); err != nil {
+			return nil, nil, err
+		}
+		rep := sc.sh.Report()
+		sr := shadowRun{Name: sc.name, Requests: rep.Shadow.Requests, Mirrored: rep.Shadow.Mirrored, Dropped: rep.Shadow.Dropped,
+			Same: rep.Same, Different: rep.Diff, Errors: rep.Errors}
+		fmt.Printf("  %-36s %d requests, %d copied, %d dropped, %d same, %d different, %d errors\n", sc.name, sr.Requests, sr.Mirrored, sr.Dropped, sr.Same, sr.Different, sr.Errors)
+		shadows = append(shadows, sr)
+	}
+	return out, shadows, nil
 }
 
 func us(d time.Duration) float64 { return round(float64(d.Nanoseconds()) / 1000) }
@@ -378,6 +461,7 @@ func summary(r report) string {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", t.Package, t.Test, t.Result)
 	}
 	b.WriteString("\n## Latency\n\nOver loopback, 20,000 sequential requests per row after a 2,000 request warm-up, then 16 clients for 2 seconds. The first three rows are patch with the legacy-customer example; the adapt rows are the customer-api example, where the list has three customers. The record row saves every exchange to a fixture file on disk.\n\n")
+	b.WriteString("The shadow rows serve the same v2 lookup from the primary while copies go to a candidate in the background (queue 64, 4 workers, candidate timeout 5 s). Every answer in every row was checked; a wrong one stops the recording.\n\n")
 	b.WriteString("| Path | p50 | p99 | Requests/s (16 clients) |\n| --- | --- | --- | --- |\n")
 	for _, l := range r.Latency {
 		fmt.Fprintf(&b, "| %s | %.1f µs | %.1f µs | %.0f |\n", l.Name, l.P50Micros, l.P99Micros, l.ReqPerSec)
@@ -387,5 +471,12 @@ func summary(r report) string {
 	fmt.Fprintf(&b, "Added by adapt rebuilding a v1 lookup from v2: %.1f µs at p50, %.1f µs at p99.\n", r.AdaptLookupP50, r.AdaptLookupP99)
 	fmt.Fprintf(&b, "Added by adapt rebuilding a v1 list from v2: %.1f µs at p50, %.1f µs at p99.\n", r.AdaptListP50, r.AdaptListP99)
 	fmt.Fprintf(&b, "Added by record saving a v2 lookup to a fixture file: %.1f µs at p50, %.1f µs at p99.\n", r.RecordP50, r.RecordP99)
+	if len(r.Shadow) > 0 {
+		b.WriteString("\n## Shadow\n\nTime added on the primary path, against a direct call to v2, and what happened to the copies over all requests of the row.\n\n")
+		b.WriteString("| Candidate | Added p50 | Added p99 | Requests | Copied | Dropped (queue full) | Same | Different | Errors |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+		for _, s := range r.Shadow {
+			fmt.Fprintf(&b, "| %s | %.1f µs | %.1f µs | %d | %d | %d | %d | %d | %d |\n", strings.TrimPrefix(s.Name, "shadow: "), s.AddedP50, s.AddedP99, s.Requests, s.Mirrored, s.Dropped, s.Same, s.Different, s.Errors)
+		}
+	}
 	return b.String()
 }

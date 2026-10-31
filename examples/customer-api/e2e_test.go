@@ -3,6 +3,7 @@ package customerapi_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/aftermarket-dev/aftermarket/internal/fixture"
 	"github.com/aftermarket-dev/aftermarket/internal/record"
 	"github.com/aftermarket-dev/aftermarket/internal/replay"
+	"github.com/aftermarket-dev/aftermarket/internal/shadow"
 )
 
 func adaptOver(t *testing.T, cfg *adapt.Config, upstream string) string {
@@ -213,4 +215,63 @@ func adaptHandler(t *testing.T, cfg *adapt.Config, upstream *url.URL) http.Handl
 		t.Fatal(err)
 	}
 	return px
+}
+
+// TestShadowBeforeTheSwitch runs the old client's suite live against v1
+// while shadow copies every call to the candidate. Against v2 through adapt
+// all twelve answers are the same; against v2 directly all twelve differ,
+// exactly as replay reports on the recorded suite. Clients pass either way,
+// since they only ever see v1's answers.
+func TestShadowBeforeTheSwitch(t *testing.T) {
+	cfg, err := adapt.LoadFile("adapt.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(candidate string) replay.Report {
+		v1 := httptest.NewServer(customerapi.NewV1())
+		defer v1.Close()
+		pu, _ := url.Parse(v1.URL)
+		cu, _ := url.Parse(candidate)
+		// One worker keeps the writes in order on the candidate.
+		sh, err := shadow.New(shadow.Options{Primary: pu, Candidate: cu, IncludeWrites: true, Workers: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := httptest.NewServer(sh)
+		defer srv.Close()
+		if failed := customerapi.Failed(customerapi.Contract(srv.URL)); len(failed) > 0 {
+			t.Fatalf("the old client failed through shadow: %v", failed)
+		}
+		if err := sh.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return sh.Report()
+	}
+	v2 := httptest.NewServer(customerapi.NewV2())
+	defer v2.Close()
+	rep := run(adaptOver(t, cfg, v2.URL))
+	if rep.Same != 12 || rep.Diff != 0 || rep.Errors != 0 {
+		t.Fatalf("v1 and v2 through adapt, live: %s", rep.Summary())
+	}
+	v2b := httptest.NewServer(customerapi.NewV2())
+	defer v2b.Close()
+	live := run(v2b.URL)
+	if live.Diff != 12 {
+		t.Fatalf("v1 and v2 directly, live: %s", live.Summary())
+	}
+	// The same differences replay finds on the recorded suite.
+	f := recordContract(t)
+	fresh := func(h http.Handler) *url.URL {
+		s := httptest.NewServer(h)
+		t.Cleanup(s.Close)
+		u, _ := url.Parse(s.URL)
+		return u
+	}
+	recorded, _ := replay.Run(context.Background(), f, replay.Options{A: fresh(customerapi.NewV1()), B: fresh(customerapi.NewV2()), IncludeWrites: true})
+	for i := range recorded.Cases {
+		l, r := live.Cases[i], recorded.Cases[i]
+		if l.Method != r.Method || l.Path != r.Path || fmt.Sprint(l.Diffs) != fmt.Sprint(r.Diffs) {
+			t.Errorf("case %d:\nlive     %s %s %v\nrecorded %s %s %v", i+1, l.Method, l.Path, l.Diffs, r.Method, r.Path, r.Diffs)
+		}
+	}
 }

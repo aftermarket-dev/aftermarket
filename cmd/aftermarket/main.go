@@ -39,6 +39,8 @@ Usage:
   aftermarket record --upstream URL --out fixture.yaml [--config record.yaml] [--listen ADDR]
   aftermarket record check --config record.yaml
   aftermarket replay --fixture fixture.yaml --a URL [--b URL] [--include-writes]
+  aftermarket shadow --primary URL --candidate URL [--config record.yaml] [--listen ADDR]
+                     [--report FILE] [--json FILE] [--sample F] [--include-writes]
 
   aftermarket config check --overlay overlay.yaml [--base FILE]
   aftermarket config diff  --overlay overlay.yaml [--base FILE]
@@ -69,7 +71,9 @@ Usage:
 patch fixes requests and responses with small rules. adapt maps old API
 endpoints onto new ones. record saves real traffic as fixtures, with
 credentials removed, and replay sends them to two versions of a service and
-reports the differences. config changes a vendor's config file through an
+reports the differences. shadow does the same on live traffic: clients get
+the primary's answers, and copies go to the candidate in the background.
+config changes a vendor's config file through an
 overlay, without ever editing the file itself. hook watches files, folders,
 HTTP endpoints and command output, and sends a signed webhook for each
 change. guard stands in front of an app that can't protect itself, and turns
@@ -102,6 +106,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runTool(adaptTool, args[1:], stdout, stderr)
 	case "record":
 		return runRecord(args[1:], stdout, stderr)
+	case "shadow":
+		return runShadow(args[1:], stdout, stderr)
 	case "replay":
 		return runReplay(args[1:], stdout, stderr)
 	case "config":
