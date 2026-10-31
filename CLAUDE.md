@@ -136,6 +136,38 @@ The owner gives the go-ahead and creates repos. Everything else is done here: co
 ### Later, decided with the owner at the time
 Afterlife and AfterTrace stay research; Afterlife only ever replaces documented APIs, never licence checks or copy protection.
 
+## In progress: live shadow mode (0.10.0, started Oct 31 2026)
+
+Asked for by the owner on Oct 31 2026. A fresh session or ChatGPT continues from this section alone.
+
+What and why: AfterDiff (`replay`) compares two versions of a service on recorded fixtures. Shadow mode does the same on live traffic: a proxy serves every request from the primary (current) service unchanged, mirrors a copy to the candidate (new) service in the background, compares the two answers with replay's own comparison and ignore rules, and keeps a running diff report. It finds what a recording missed, before the switch. The client only ever sees the primary's answer, and the candidate can never slow down or break the primary path.
+
+Design decisions:
+- Command: a new subcommand, `aftermarket shadow --primary URL --candidate URL [--config record.yaml] [--listen ADDR] [--report FILE] [--json FILE] [--sample F] [--queue N] [--workers N] [--candidate-timeout D] [--include-writes] [--ignore PATH] [--header NAME] [--audit-log FILE|-] [--health-path PATH]`. replay is a batch command that ends with an exit status; shadow is a long-running proxy like record, so it gets its own subcommand (documented as AfterDiff's live mode), the same way record and replay are separate.
+- Primary path: record's pass-through proxy (internal/record), unchanged bytes, streaming, every existing safety rule (WatchBody, 408/400/502/504, upgrades). record.Options gets a `Mirror` hook called with the raw finished exchange instead of redacting and writing it; without the hook record behaves exactly as before.
+- Mirror after the primary answer has finished, never in parallel with it: the hook only does a non-blocking send into a bounded queue. Queue full means the exchange is dropped and counted. Workers send to the candidate with their own client and timeout.
+- Defaults: sample 1 (every request; 0.1 mirrors one in ten, chosen by a counter so it is exact and testable), queue 64, workers 4, candidate timeout 5s, GET and HEAD only unless --include-writes (as replay). Bodies over max_body (record config, 1 MiB) aren't mirrored and are counted. Memory stays bounded by queue x 2 x max_body plus in-flight taps.
+- Comparison: replay exports `Send` (builds the request exactly as replay does) and `Compare` (status, chosen headers, JSON by meaning with --ignore), so live differences match replay on the same traffic. Primary gzip bodies are decoded before comparing, as replay's client does.
+- Report: replay's Markdown and JSON report format (A = primary, B = candidate) plus a shadow block with counts (seen, mirrored, compared, dropped because the queue was full, not mirrored and why). Only differing and error cases are listed, at most 1000; counts keep going. Rewritten atomically (temp file and rename) at most once a second while running and once at stop.
+- Redaction: the record config's redact lists apply to everything written: query values in listed keys read REDACTED in report paths; a compared header on the redact list shows REDACTED; a JSON difference at a redacted path reads "differs (REDACTED)" without values. Upstream URLs go through httpx.SafeURL. Real credentials are still sent to the candidate, as the primary got them.
+- No new dependencies. Version 0.10.0 (minor bump).
+
+Steps (mark done as they land, push this file with the code):
+1. [done] Plan in CLAUDE.md, pushed with [skip ci].
+2. [ ] replay: export Send and Compare (masking for redacted paths), no behaviour change, tests green.
+3. [ ] record: Mirror hook; tests that record without it is unchanged.
+4. [ ] internal/shadow: queue, workers, sampling, report writer, stats; unit tests.
+5. [ ] `aftermarket shadow` CLI, usage text, CLI tests.
+6. [ ] Promise tests: byte-identical answers with and without shadowing (random traffic); dead, slow and erroring candidate add no latency beyond a small bound and never change an answer; live differences equal replay's on the same traffic; no credential reaches the report; queue full drops and counts.
+7. [ ] examples/customer-api: shadow v1 against v2 directly (12 differ) and against v2 through adapt (12 same), as an e2e test.
+8. [ ] tools/record: shadow latency figures (no candidate, dead, slow, erroring); re-record test/results.
+9. [ ] README, docs/record.md (shadow section), CI example line, version 0.10.0.
+10. [ ] Independent review, fixes, re-record.
+11. [ ] Push, watch CI and release, check files, SHA256SUMS, latest links, run a downloaded binary.
+12. [ ] Site: post, AfterTest and AfterDiff reference, quick start, roadmap, feature lists, hero badge and figures; check the deploy once.
+
+Resume at the first unchecked step. Work so far lives on main only.
+
 ## Status
 
 - Oct 19 2026: plan approved. Site cleaned and aligned with this plan. Repo initialised with LICENSE, NOTICE and this file.
